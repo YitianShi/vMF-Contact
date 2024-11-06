@@ -1,0 +1,4 @@
+{
+  "ros.distro": "humble",
+  "python.analysis.extraPaths": ["/home/yitian/Research/lib/VLM/dinov2"],
+}

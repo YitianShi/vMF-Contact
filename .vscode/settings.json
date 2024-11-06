@@ -1,0 +1,37 @@
+{
+    "ros.distro": "humble",
+    "python.autoComplete.extraPaths": [
+        "/home/yitian/ros2_ws/build/robot_grasping",
+        "/home/yitian/ros2_ws/install/robot_grasping/lib/python3.10/site-packages",
+        "/home/yitian/ros2_ws/install/hello_moveit_py/lib/python3.10/site-packages",
+        "/home/yitian/ros2_humble/install/tf2_tools/lib/python3.10/site-packages",
+        "/home/yitian/ros2_humble/install/tf2_sensor_msgs/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/tf2_kdl/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/tf2_geometry_msgs/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/examples_tf2_py/lib/python3.10/site-packages",
+        "/home/yitian/ros2_humble/install/tf2_ros_py/lib/python3.10/site-packages",
+        "/home/yitian/ros2_humble/install/tf2_py/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/tf2_msgs/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/robotiq_2f_urcap_adapter/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/orbbec_camera_msgs/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/yitian/ros2_ws/build/robot_grasping",
+        "/home/yitian/ros2_ws/install/robot_grasping/lib/python3.10/site-packages",
+        "/home/yitian/ros2_ws/install/hello_moveit_py/lib/python3.10/site-packages",
+        "/home/yitian/ros2_humble/install/tf2_tools/lib/python3.10/site-packages",
+        "/home/yitian/ros2_humble/install/tf2_sensor_msgs/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/tf2_kdl/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/tf2_geometry_msgs/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/examples_tf2_py/lib/python3.10/site-packages",
+        "/home/yitian/ros2_humble/install/tf2_ros_py/lib/python3.10/site-packages",
+        "/home/yitian/ros2_humble/install/tf2_py/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/tf2_msgs/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/robotiq_2f_urcap_adapter/local/lib/python3.10/dist-packages",
+        "/home/yitian/ros2_humble/install/orbbec_camera_msgs/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}

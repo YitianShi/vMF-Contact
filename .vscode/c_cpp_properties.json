@@ -1,0 +1,37 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/yitian/ros2_humble/install/orbbec_camera/include/**",
+        "/home/yitian/ros2_humble/install/tf2_sensor_msgs/include/**",
+        "/home/yitian/ros2_humble/install/tf2_kdl/include/**",
+        "/home/yitian/ros2_humble/install/tf2_geometry_msgs/include/**",
+        "/home/yitian/ros2_humble/install/tf2_eigen/include/**",
+        "/home/yitian/ros2_humble/install/tf2_bullet/include/**",
+        "/home/yitian/ros2_humble/install/tf2_ros/include/**",
+        "/home/yitian/ros2_humble/install/tf2_msgs/include/**",
+        "/home/yitian/ros2_humble/install/tf2_eigen_kdl/include/**",
+        "/home/yitian/ros2_humble/install/tf2/include/**",
+        "/home/yitian/ros2_humble/install/robotiq_driver/include/**",
+        "/home/yitian/ros2_humble/install/serial/include/**",
+        "/home/yitian/ros2_humble/install/robotiq_controllers/include/**",
+        "/home/yitian/ros2_humble/install/robotiq_2f_urcap_adapter/include/**",
+        "/home/yitian/ros2_humble/install/orbbec_camera_msgs/include/**",
+        "/opt/ros/humble/include/**",
+        "/home/yitian/ros2_ws/src/hello_moveit_cpp/include/**",
+        "/home/yitian/ros2_ws/src/ifl_air_description/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}
