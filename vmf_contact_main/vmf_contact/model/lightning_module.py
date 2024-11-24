@@ -420,8 +420,7 @@ class vmfContactLightningModule(pl.LightningModule):
                 approach_loss = F.l1_loss(bin_score, bin_score_gt, reduction="mean")
                 self.losses["approach"] = self.losses["approach"] + approach_loss
 
-                approach = (bin_vectors * bin_score.unsqueeze(-1).detach().sigmoid()).sum(1)
-                approach = torch.nn.functional.normalize(approach, dim=-1)
+                approach = torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
 
                 # Update the AUSC metric
                 if not self.training:
@@ -657,8 +656,7 @@ class vmfContactLightningModule(pl.LightningModule):
             bin_vectors = rotate_circle_to_batch_of_vectors(
                         bin_score.shape[-1], baseline_vec.squeeze(0)
                     )
-            approach = (bin_vectors * bin_score.sigmoid().unsqueeze(-1).detach()).sum(1)
-            approach = torch.nn.functional.normalize(approach, dim=-1)
+            approach = torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
             predictions["approach"] = approach
 
             grasp_width = predictions["grasp_width"] = out["grasp_width"].squeeze(0)
