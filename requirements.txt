@@ -1,0 +1,10 @@
+lightning==2.4.0
+wandb
+opencv-python
+einops
+open3d
+multimethod
+termcolor
+shortuuid
+easydict
+normflows

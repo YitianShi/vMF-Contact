@@ -1,0 +1,36 @@
+# Comments are provided throughout this file to help you get started.
+# If you need more help, visit the Docker Compose reference guide at
+# https://docs.docker.com/go/compose-spec-reference/
+
+# Here the instructions define your application as a service called "app".
+# This service is built from the Dockerfile in the current directory.
+# You can add other services your application may depend on here, such as a
+# database or a cache. For examples, see the Awesome Compose repository:
+# https://github.com/docker/awesome-compose
+services:
+  app:
+    build:
+      context: .
+      shm_size: '40gb'
+    shm_size: '40gb'
+    volumes:
+      - .:/vmf
+      - /media/HDD2/Yitian_data/data_all:/data_all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    tty: true
+    # If your application exposes a port, uncomment the following lines and change
+    # the port numbers as needed. The first number is the host port and the second
+    # is the port inside the container.
+    # ports:
+    #   - 8080:8080
+    # volumes:
+    #   db-data:
+    # secrets:
+    #   db-password:
+    #     file: db/password.txt
