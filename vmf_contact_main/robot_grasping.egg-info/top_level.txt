@@ -1,2 +1,0 @@
-openpoints
-vmf_contact_main

@@ -7,6 +7,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from wandb.wandb_run import Run
 import sys, os
+import torch.distributed as dist
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(current_dir, '.'))
@@ -323,7 +324,11 @@ def main_module(
 
     # Initialize logger if needed
     if args.experiment is not None and not args.debug:
+<<<<<<< HEAD
+        remote_logger = WandbLogger(name=args.experiment, project="diffusion_contact")
+=======
         remote_logger = WandbLogger(name=args.experiment, project="vmf_contact")
+>>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
         try:
             remote_logger.experiment.config.update(
                 {

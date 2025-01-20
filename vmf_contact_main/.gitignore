@@ -1,5 +1,5 @@
 pic_debug
-logs
 wandb
+logs
 __pycache__
 *.pth

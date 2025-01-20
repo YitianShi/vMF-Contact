@@ -205,10 +205,6 @@ class vmfContactModule():
         trainer_checkpoint = ModelCheckpoint(
             f"logs/training/{self.args.point_backbone}", monitor="val/loss", mode="min"
         )
-
-        logging.getLogger("pytorch_lightning").setLevel(
-            logging.INFO if self.flow_finetune == 0 else level
-        )
         trainer = self.trainer(
             # accumulate_grad_batches=data.gradient_accumulation_steps,
             callbacks=[trainer_checkpoint],
@@ -221,15 +217,10 @@ class vmfContactModule():
         main_module, ckpt_loaded = self.module_loader(self.args.ckpt)
 
         # Train main module
-        if not ckpt_loaded or self.flow_finetune == 0:
+        if ckpt_loaded or self.flow_finetune == 0:
             logger.warning("Train main module from scratch.")
-            trainer.fit(main_module, data)
-            best_module = vmfContactLightningModule.load_from_checkpoint(
-                trainer_checkpoint.best_model_path, strict=False,
-                debug=self.args.debug
-            )
-        else:
-            best_module = main_module
+            trainer.fit(main_module, data, ckpt_path=ckpt_loaded)
+        best_module = main_module
 
         # Fine-tune flow module
         if self.flow_finetune > 0:
@@ -294,15 +285,14 @@ class vmfContactModule():
 
     def module_loader(self, ckpt = None):
         if ckpt is not None:
-            ckpt = Path(f"{current_file_folder}/../../../logs/training/{self.args.point_backbone}/{ckpt}.ckpt")
-            logger.info(f"Resuming from checkpoint: {ckpt}")
-            main_module = vmfContactLightningModule.load_from_checkpoint(ckpt, strict=False, debug=self.args.debug, args=self.args)
-            ckpt_loaded = True
+            ckpt_loaded = Path(f"{current_file_folder}/../../../logs/training/{self.args.point_backbone}/{ckpt}.ckpt")
+            logger.info(f"Resuming from checkpoint: {ckpt_loaded}")
+            main_module = vmfContactLightningModule.load_from_checkpoint(ckpt_loaded, strict=False, debug=self.args.debug, args=self.args)
         else:
             logger.warning(
                 "No checkpoint found to resume from, train contact 3d from scratch."
             )
             main_module = vmfContactLightningModule(args=self.args)
-            ckpt_loaded = False
+            ckpt_loaded = None
         return main_module, ckpt_loaded
             

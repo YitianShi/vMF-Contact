@@ -2,7 +2,11 @@
 devices: 4  # Distributed training device number
 debug: false  # Run in debug mode
 learning_rate: 1e-4  # Learning rate
+<<<<<<< HEAD
+learning_rate_score: 3e-4  # Learning rate for flow
+=======
 learning_rate_flow: 3e-4  # Learning rate for flow
+>>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 learning_rate_decay: 5e-4  # Learning rate decay
 run_finetuning: false  # Run fine-tuning
 max_epochs: 20000  # Maximum number of epochs
@@ -27,8 +31,12 @@ prob_baseline: lh  # Baseline vector (post, lh, or None)
 certainty_budget: "constant"  # Certainty budget
 entropy_weight: 1e-6  # Weight for entropy regularizer
 flow_layers: 8  # Number of flow layers
+<<<<<<< HEAD
+point_backbone: spotr  # Point backbone (pointnet, pointnext, or spotr)
+=======
 point_backbone: pointnext-b  # Point backbone (pointnet, pointnext, or spotr)
 ckpt: "epoch=112-step=86558"
+>>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 
 # Flow model settings
 # hidden_feat_flow: 512  # Hidden feature size for the flow

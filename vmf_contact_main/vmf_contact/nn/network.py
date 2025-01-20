@@ -35,6 +35,8 @@ class vmfContact(nn.Module):
         fine_sampling_ball_diameter=0.16,
         # uncertainty parameters
         prob_baseline=None,
+        # diffusion
+        diffusion=False,
     ):
         super().__init__()
 
@@ -113,15 +115,17 @@ class vmfContact(nn.Module):
         # Gripper rotation (quaternion) and binary opening width
         self.rotation_dim = 4
         
-        self.orientation_head = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim // 2),
-            nn.ReLU(),
-            nn.Linear(embedding_dim // 2, embedding_dim // 2),
-            nn.ReLU(),
-            nn.Linear(embedding_dim // 2, embedding_dim),
-            nn.ReLU(),
-            nn.Linear(embedding_dim, self.baseline_dim + self.bin_num + 2),
-        )
+        self.diffusion = diffusion
+        if not diffusion:
+            self.orientation_head = nn.Sequential(
+                nn.Linear(embedding_dim, embedding_dim // 2),
+                nn.ReLU(),
+                nn.Linear(embedding_dim // 2, embedding_dim // 2),
+                nn.ReLU(),
+                nn.Linear(embedding_dim // 2, embedding_dim),
+                nn.ReLU(),
+                nn.Linear(embedding_dim, self.baseline_dim + self.bin_num + 2),
+            )
 
         self.increase_dim = nn.Sequential(
             nn.Conv1d(embedding_dim, 1024, 1),
@@ -151,7 +155,7 @@ class vmfContact(nn.Module):
 
         if self.query_cross_attn_pcd is not None:
              # Initialize query features
-            kq_feature = contact_pcd_features[-1].permute(2, 0, 1) # Q B C
+            kv_feature = contact_pcd_features[-1].permute(2, 0, 1) # Q B C
             # Embed contact points
             embed = self.contact_points_embed # B 1 C
             contact_pcd_features_embed = embed.weight.unsqueeze(0).repeat(
@@ -164,7 +168,7 @@ class vmfContact(nn.Module):
             # The query cross-attends to contact point features (point features)
             contact_pcd_feature = self._compute_cross_attn_features(
                 contact_pcd_feature,
-                kq_feature,
+                kv_feature,
                 self.relative_pe_layer(contact_pcd_i),
                 None,
             )[-1]
@@ -195,7 +199,7 @@ class vmfContact(nn.Module):
         cp = self.contact_point_fnn(contact_pcd_feature) + contact_pcd_i
 
         # Predict the grasps (contact point, baseline vector, bin scores)
-        baseline, bin_score, grasp_width, graspness = self._predict_grasp(contact_pcd_feature)
+        baseline, bin_score, grasp_width, graspness = self._predict_grasp(contact_pcd_feature) if not self.diffusion else None, None, None, None
 
         # match the ground-truth contact points to the query positions
         if gt_cp_batch is not None:

@@ -74,7 +74,7 @@ def get_args_parser(
         help="Learning rate",
     )
     parser.add_argument(
-        "--learning_rate_flow",
+        "--learning_rate_score",
         type=float,
         default=3e-4,
         help="Learning rate",
@@ -147,7 +147,7 @@ def get_args_parser(
         "--data-root-dir",
         type=str,
         help="Root directory of the data",
-        default="data_all",
+        default="dataset/vmf_data",
     )
     parser.add_argument(
         "--num_workers",
@@ -272,16 +272,16 @@ def get_args_parser(
             5e-2,
             0.1,
         ],
-        #data_root_dir=f"{data_path}/data_all/data_debug",
-        data_root_dir=glob.glob(f"{data_path}/data_all/data*"),
-        data_root_dir_test=[f"{data_path}/data_all/data4"],
-        data_root_dir_debug=[f"{data_path}/data_all/data_debug"],
+        #data_root_dir=f"{data_path}/dataset/vmf_data/data_debug",
+        data_root_dir=glob.glob(f"{data_path}/dataset/vmf_data/data*"),
+        data_root_dir_test=[f"{data_path}/dataset/vmf_data/data4"],
+        data_root_dir_debug=[f"{data_path}/dataset/vmf_data/data_debug"],
     )
     return parser
 
 
 import yaml
-print(f"{data_path}/data_all/data*")
+print(f"{data_path}/dataset/vmf_data/data*")
 def parse_args_from_yaml(config_path: str):
     # Load default configurations from YAML
     with open(config_path, 'r') as f:

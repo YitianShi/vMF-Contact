@@ -6,7 +6,7 @@ from scipy.optimize import linear_sum_assignment
 # warnings.warn("Unable to load pointnet2_ops cpp extension. JIT Compiling.")
 
 
-def match(source, target, dist_th=0.005, hungarian=False):
+def match(source, target, dist_th=0.01, hungarian=False):
     """
     Hungarian matching between source and target points
     Args:

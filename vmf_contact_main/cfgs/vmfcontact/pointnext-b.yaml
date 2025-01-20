@@ -8,7 +8,7 @@ model:
   encoder_args:
     NAME: PointNextEncoder
     blocks: [1, 2, 3, 2, 2]
-    strides: [1, 4, 4, 4, 4]
+    strides: [1, 10, 4, 2, 2]
     sa_layers: 2 
     sa_use_res: True 
     width: 64

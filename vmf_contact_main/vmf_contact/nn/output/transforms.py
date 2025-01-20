@@ -1,12 +1,3 @@
-import numpy as np
-import open3d as o3d
-import torch
-from typing import Union, Optional
-<<<<<<< HEAD
-from beartype import beartype
-from ..nn.output.transforms import matrix_to_quaternion, quaternion_to_matrix
-=======
-
 #### Codes borrowed from pytorch3d ####
 
 
@@ -14,188 +5,9 @@ from typing import Optional, Union, Tuple, List
 import math
 import torch
 import torch.nn.functional as F
-import random
 
 Device = Union[str, torch.device]
 
-class GraspBuffer:
-    def __init__(self, device="cuda:0"):
-        self.buffer_dict = {
-            "pcds": [],
-            "baselines": [], 
-            "approaches": [], 
-            "cp": [], 
-            "cp2": [], 
-            "kappa": [], 
-            "graspness": []}
-        self.buffer_size = 0
-        
-    def create_vis(self):
-        self.vis = o3d.visualization.Visualizer()
-        self.vis.create_window()
-
-    def update(self, 
-               pcds, 
-               predictions,
-               shift=0.0,
-               resize=1.0, 
-               grasp_height_th=5e-3, 
-               grasp_width_th=0.1, 
-               graspness_th=0.3, 
-               pcd_from_prompt=None):
-        
-        if not isinstance(shift, torch.Tensor):
-            shift = torch.tensor(shift, device=pcds.device, dtype=torch.float32)
-        if not isinstance(resize, torch.Tensor):
-            resize = torch.tensor(resize, device=pcds.device, dtype=torch.float32)
-        
-        cp = predictions["contact_point"]
-        cp2 = predictions["contact_point"] + predictions["grasp_width"].unsqueeze(-1) * predictions["baseline"]
-        grasp_width = predictions["grasp_width"]
-        graspness = predictions["graspness"]
-        approach = predictions["approach"]
-        baseline = predictions["baseline"]
-        kappa = predictions["kappa"]
-
-        filter = (graspness > graspness_th) & \
-                    (grasp_width < grasp_width_th) & \
-                    (cp[..., -1] > grasp_height_th) & \
-                    (cp2[..., -1] > grasp_height_th)
-
-        if pcd_from_prompt is not None:
-            pcd_from_prompt = torch.tensor(pcd_from_prompt, device=self.device, dtype=torch.float32)
-            # calculate the distance between the contact points and the prompt points
-            dist = torch.cdist(cp, pcd_from_prompt)
-            # dist2 = torch.cdist(cp2, pcd_from_prompt)
-            filter = filter & (dist.min(1).values < 0.01)
-        
-        pcds = pcds * resize + shift
-
-        if filter.sum() == 0:
-            print("No valid grasp")
-            return False
-
-        # print(f"Number of grasps: {filter.sum()}")
-        else:
-            cp = cp[filter] * resize + shift
-            cp2 = cp2[filter] * resize + shift
-            mid_pt = (cp2 + cp) / 2
-            
-            baseline = predictions["baseline"][filter]
-            kappa = predictions["kappa"][filter]
-            approach = approach[filter]
-            graspness = graspness[filter]
-
-            self.buffer_dict["pcds"].append(pcds)  
-            self.buffer_dict["baselines"].append(baseline)
-            self.buffer_dict["approaches"].append(approach)
-            self.buffer_dict["cp"].append(cp)
-            self.buffer_dict["cp2"].append(cp2)
-            self.buffer_dict["kappa"].append(kappa)
-            self.buffer_dict["graspness"].append(graspness)
-
-            self.buffer_size += 1
-            return True
-  
-    def get_pcds_all(self):
-        return torch.cat(self.buffer_dict["pcds"], dim=0)
-    
-    def get_grasp_all(self):
-        baselines = torch.cat(self.buffer_dict["baselines"], dim=0)
-        approaches = torch.cat(self.buffer_dict["approaches"], dim=0)
-        cp = torch.cat(self.buffer_dict["cp"], dim=0)
-        cp2 = torch.cat(self.buffer_dict["cp2"], dim=0)
-        kappa = torch.cat(self.buffer_dict["kappa"], dim=0)
-        graspness = torch.cat(self.buffer_dict["graspness"], dim=0)
-        return baselines, approaches, cp, cp2, kappa, graspness
-    
-    def get_pose_all(self, convention="xzy"):
-        baselines, approaches, cp, cp2, kappa, graspness = self.get_grasp_all()
-        poses = rotation_from_contact(baseline=baselines, 
-                                      approach=approaches, 
-                                      translation=(cp+cp2)/2, 
-                                      convention=convention)
-        return poses, kappa, graspness
-    
-    def get_pcds_curr(self):
-        return self.buffer_dict["pcds"][-1]
-    
-    def get_grasp_curr(self):
-        baseline = self.buffer_dict["baselines"][-1]
-        approach = self.buffer_dict["approaches"][-1]
-        cp = self.buffer_dict["cp"][-1]
-        cp2 = self.buffer_dict["cp2"][-1]
-        kappa = self.buffer_dict["kappa"][-1]
-        graspness = self.buffer_dict["graspness"][-1]
-        return baseline, approach, cp, cp2, kappa, graspness
-    
-    def get_pose_curr(self, convention="xzy"):
-        baseline, approach, cp, cp2, kappa, graspness = self.get_grasp_curr()
-        poses = rotation_from_contact(baseline=baseline, 
-                                      approach=approach, 
-                                      translation=(cp+cp2)/2,
-                                      convention=convention)
-        return poses, kappa, graspness
-    
-    def set_view(self, center):
-        """Set a specific viewpoint."""
-        ctr = self.vis.get_view_control()
-
-        # Set camera parameters
-        ctr.set_zoom(1)  # Zoom factor
-        ctr.set_lookat(center)  # Look at center
-        ctr.set_front([-1, 0, 1])  # View direction
-        ctr.set_up([0, 0, 1])  # Up vector
-    
-    def vis_grasps(self, all = False):
-
-        if len(self.buffer_dict["pcds"]) == 0:
-            print("Buffer is empty, no grasp to visualize")
-            return
-
-        pcd = self.get_pcds_curr()
-        baseline, approach, cp, cp2, kappa, graspness = self.get_grasp_curr()
-        vis_list = vis_grasps(
-                    samples=pcd,
-                    cp=cp,
-                    cp2=cp2,
-                    kappa=kappa,
-                    approach=approach,
-                    score = graspness,
-                )
-            
-        if not hasattr(self, "vis"):
-            self.create_vis()
-
-        if not all:
-            self.vis.clear_geometries()
-
-        for geom in vis_list:
-            self.vis.add_geometry(geom)
-        # Update the visualizer
-        center = pcd.mean(0).cpu().numpy()
-        self.set_view(center = center)
-        self.vis.poll_events()
-        self.vis.update_renderer()            
-
-    def get_pose_curr_best(self, convention="xzy", sort_by="kappa", sample_num=1):
-
-        if len(self.buffer_dict["pcds"]) == 0:
-            print("Buffer is empty, no grasp to choose")
-            return None
-        
-        poses, kappa, graspness = self.get_pose_curr(convention)
-        
-        score = kappa if sort_by == "kappa" else graspness
-        
-        #sort poses by criterion
-        sample_num = min(sample_num, poses.size(0))
-        poses_candidates = poses[torch.argsort(score, descending=True)][:sample_num]
-
-        #randomly sample 1 poses
-        pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
-        return pose_chosen
-    
 
 def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
     """
@@ -543,6 +355,7 @@ def random_quaternions(n: int, device: Optional[Union[str, torch.device]] = None
     return standardize_quaternion(q / torch.norm(q, dim=-1, keepdim=True))
 
 
+
 def hat(v: torch.Tensor) -> torch.Tensor:
     """
     Compute the Hat operator [1] of a batch of 3D vectors.
@@ -606,6 +419,7 @@ def hat_inv(h: torch.Tensor) -> torch.Tensor:
     v = torch.stack((x, y, z), dim=1)
 
     return v
+
 
 
 def _so3_exp_map(
@@ -750,6 +564,7 @@ def se3_exp_map(log_transform: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
 
 DEFAULT_ACOS_BOUND: float = 1.0 - 1e-4
 
+
 def acos_linear_extrapolation(
     x: torch.Tensor,
     bounds: Tuple[float, float] = (-DEFAULT_ACOS_BOUND, DEFAULT_ACOS_BOUND),
@@ -801,7 +616,8 @@ def acos_linear_extrapolation(
     acos_extrap[x_upper] = _acos_linear_approximation(x[x_upper], upper_bound)
     # the linear extrapolation for x <= lower_bound
     acos_extrap[x_lower] = _acos_linear_approximation(x[x_lower], lower_bound)
-#### Codes borrowed from pytorch3d ####
+
+    return acos_extrap
 
 
 def _acos_linear_approximation(x: torch.Tensor, x0: float) -> torch.Tensor:
@@ -871,6 +687,9 @@ def so3_rotation_angle(
             return torch.acos(phi_cos)
 
 
+
+
+
 def so3_log_map(
     R: torch.Tensor, eps: float = 0.0001, cos_bound: float = 1e-4
 ) -> torch.Tensor:
@@ -918,7 +737,6 @@ def so3_log_map(
 
     return log_rot
 
-
 def _get_se3_V_input(log_rotation: torch.Tensor, eps: float = 1e-4):
     """
     A helper function that computes the input variables to the `_se3_V_matrix`
@@ -930,7 +748,6 @@ def _get_se3_V_input(log_rotation: torch.Tensor, eps: float = 1e-4):
     log_rotation_hat = hat(log_rotation)
     log_rotation_hat_square = torch.bmm(log_rotation_hat, log_rotation_hat)
     return log_rotation, log_rotation_hat, log_rotation_hat_square, rotation_angles
-
 
 def se3_log_map(
     transform: torch.Tensor, eps: float = 1e-4, cos_bound: float = 1e-4
@@ -1033,6 +850,36 @@ def quaternion_to_axis_angle(quaternions: torch.Tensor) -> torch.Tensor:
     )
     return quaternions[..., 1:] / sin_half_angles_over_angles
 
+def axis_angle_to_quaternion(axis_angle: torch.Tensor) -> torch.Tensor:
+    """
+    Convert rotations given as axis/angle to quaternions.
+    Args:
+        axis_angle: Rotations given as a vector in axis angle form,
+            as a tensor of shape (..., 3), where the magnitude is
+            the angle turned anticlockwise in radians around the
+            vector's direction.
+    Returns:
+        quaternions with real part first, as tensor of shape (..., 4).
+    """
+    angles = torch.norm(axis_angle, p=2, dim=-1, keepdim=True)
+    half_angles = angles * 0.5
+    eps = 1e-6
+    small_angles = angles.abs() < eps
+    sin_half_angles_over_angles = torch.empty_like(angles)
+    sin_half_angles_over_angles[~small_angles] = (
+        torch.sin(half_angles[~small_angles]) / angles[~small_angles]
+    )
+    # for x small, sin(x/2) is about x/2 - (x/2)^3/6
+    # so sin(x/2)/x is about 1/2 - (x*x)/48
+    sin_half_angles_over_angles[small_angles] = (
+        0.5 - (angles[small_angles] * angles[small_angles]) / 48
+    )
+    quaternions = torch.cat(
+        [torch.cos(half_angles), axis_angle * sin_half_angles_over_angles], dim=-1
+    )
+    return quaternions
+
+
 @torch.jit.script
 def multiply_se3(T1: torch.Tensor, T2: torch.Tensor, pre_normalize: bool = False, post_normalize: bool = True) -> torch.Tensor:
     if len(T1) == 1 or len(T2) == 1:
@@ -1081,404 +928,3 @@ def quaternion_identity(n: int, device: Optional[torch.device] = None, dtype: Op
 @torch.jit.script
 def se3_from_r3(x: torch.Tensor) -> torch.Tensor:
     return torch.cat([torch.ones_like(x[...,0:1]), torch.zeros_like(x[...,:3]), x], dim=-1)
-
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
-
-def rotate_circle_to_batch_of_vectors(bin_num, target_vectors):
-    u_batch = perpendicular_highest_z(target_vectors)
-    bin_vectors = generate_bin_vectors(target_vectors, u_batch, bin_num)
-    return -bin_vectors
-
-
-def perpendicular_highest_z(v):
-    v = v / torch.norm(v, dim=1, keepdim=True)
-    # Components of the input vector
-    vx, vy, vz = v[:, 0], v[:, 1], v[:, 2]
-
-    u_x = -vy
-    u_y = vx
-    u = torch.stack([u_x, u_y, vz*0], dim=1)
-    u = u / torch.norm(u, dim=1, keepdim=True)
-
-    u = torch.linalg.cross(v, u)
-    return u
-
-
-def rotation_matrix(v, theta):
-    # Normalize v to ensure it's a unit vector
-    v = v / torch.norm(v, dim=1, keepdim=True)
-
-    # Components of v
-    vx, vy, vz = v[:, 0:1], v[:, 1:2], v[:, 2:3]
-
-    # Compute cos(theta) and sin(theta)
-    cos_theta = torch.cos(theta).unsqueeze(-1)
-    sin_theta = torch.sin(theta).unsqueeze(-1)
-    one_minus_cos_theta = 1 - cos_theta
-
-    # Rotation matrix components
-    rotation = torch.zeros(v.size(0), 3, 3, device=v.device)
-
-    rotation[:, 0, 0] = cos_theta.squeeze() + (vx * vx * one_minus_cos_theta).squeeze()
-    rotation[:, 0, 1] = (vx * vy * one_minus_cos_theta - vz * sin_theta).squeeze()
-    rotation[:, 0, 2] = (vx * vz * one_minus_cos_theta + vy * sin_theta).squeeze()
-
-    rotation[:, 1, 0] = (vy * vx * one_minus_cos_theta + vz * sin_theta).squeeze()
-    rotation[:, 1, 1] = cos_theta.squeeze() + (vy * vy * one_minus_cos_theta).squeeze()
-    rotation[:, 1, 2] = (vy * vz * one_minus_cos_theta - vx * sin_theta).squeeze()
-
-    rotation[:, 2, 0] = (vz * vx * one_minus_cos_theta - vy * sin_theta).squeeze()
-    rotation[:, 2, 1] = (vz * vy * one_minus_cos_theta + vx * sin_theta).squeeze()
-    rotation[:, 2, 2] = cos_theta.squeeze() + (vz * vz * one_minus_cos_theta).squeeze()
-
-    return rotation
-
-
-def generate_bin_vectors(v, u, num_points):
-    num_points = (num_points + 1) // 2
-
-    # Define the angles for 90-degree rotations
-    theta1 = torch.tensor([torch.pi / 2]).repeat(v.size(0)).to(v.device)
-    theta2 = torch.tensor([-torch.pi / 2]).repeat(v.size(0)).to(v.device)
-
-    # Generate rotation matrices for +90 and -90 degrees
-    rotation_matrix1 = rotation_matrix(v, theta1)
-    rotation_matrix2 = rotation_matrix(v, theta2)
-
-    # Rotate the starting vector by +90 and -90 degrees
-    u_plus_90 = torch.matmul(rotation_matrix1, u.unsqueeze(2)).squeeze(2)
-    u_minus_90 = torch.matmul(rotation_matrix2, u.unsqueeze(2)).squeeze(2)
-
-    # Generate linspace for the 180-degree coverage
-    theta_values = torch.linspace(0, 1, num_points).to(v.device).view(1, -1, 1)
-
-    # Interpolate between u and u_plus_90
-    vectors_pos = (1 - theta_values) * u.unsqueeze(
-        1
-    ) + theta_values * u_plus_90.unsqueeze(1)
-
-    # Interpolate between u and u_minus_90
-    vectors_neg = theta_values * u.unsqueeze(1) + (
-        1 - theta_values
-    ) * u_minus_90.unsqueeze(1)
-
-    # Combine positive and negative rotations
-    combined_vectors = torch.cat((vectors_neg, vectors_pos[:, 1:]), dim=1)
-
-    combined_vectors = combined_vectors / torch.norm(
-        combined_vectors, dim=2, keepdim=True
-    )
-
-    return combined_vectors
-
-
-# Function to create a cylinder between two points
-def create_cylinder_between_points(p1, p2, radius=0.05, color=[0.1, 0.1, 0.7]):
-    # Calculate the direction and length of the cylinder
-    direction = p2 - p1
-    length = np.linalg.norm(direction)
-    direction /= length
-
-    # Create a cylinder mesh
-    cylinder = o3d.geometry.TriangleMesh.create_cylinder(radius=radius, height=length)
-    cylinder.compute_vertex_normals()
-
-    # Rotate the cylinder to align with the direction vector
-    z_axis = np.array([0, 0, 1])
-    rotation_axis = np.cross(z_axis, direction)
-    rotation_angle = np.arccos(np.dot(z_axis, direction))
-    if np.linalg.norm(rotation_axis) > 0:  # Check if rotation is needed
-        rotation_axis /= np.linalg.norm(rotation_axis)
-        rotation_matrix = o3d.geometry.get_rotation_matrix_from_axis_angle(
-            rotation_axis * rotation_angle
-        )
-        cylinder.rotate(rotation_matrix, center=(0, 0, 0))
-
-    # Translate the cylinder to start at point p1
-    cylinder.translate((p1 + p2) / 2)
-
-    # Paint the cylinder with the specified color
-    cylinder.paint_uniform_color(color)
-
-    return cylinder
-
-<<<<<<< HEAD
-=======
-
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
-def over_or_re_sample(pcd, num_points):
-    c = pcd.shape[-1]
-    # Determine the maximum size
-    if pcd.shape[0] < num_points:
-        # Oversample the point cloud
-        pad_size = num_points - pcd.shape[0]
-        pcd_rest_ind = torch.randint(0, pcd.shape[0], (pad_size,), device=pcd.device)
-        pcd = torch.cat([pcd, pcd[pcd_rest_ind]], dim=0)
-    else:
-        # Resample the point cloud
-        indices = torch.randint(0, pcd.shape[0], (num_points,), device=pcd.device)
-        pcd = torch.gather(pcd, 0, indices.unsqueeze(-1).expand(-1, c))
-    return pcd
-
-<<<<<<< HEAD
-=======
-
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
-def rotation_from_contact(baseline, approach, translation, convention = "xzy", quat=False):
-    """
-    Compute the rotation matrix from the baseline and approach vectors.
-    convention follows: baseline, approach, up
-    """
-    
-    # Define the front direction (negative x-axis)
-    up_direction = torch.tensor([-1, 0, 0], dtype=baseline.dtype, device=baseline.device)
-    
-    if convention == "xzy":
-        x = torch.nn.functional.normalize(baseline, dim=-1)  # Baseline vector (B, 3)
-        z = torch.nn.functional.normalize(approach, dim=-1) # Approach vector (B, 3)
-        y = torch.nn.functional.normalize(torch.linalg.cross(z, x), dim=-1)
-        
-        # Ensure y is aligned with the up direction
-        # dot_product = torch.sum(y * up_direction, dim=-1, keepdim=True)  # dot product with up direction
-        # y = torch.where(dot_product < 0, -y, y)  # Flip y if it's pointing downward
-        
-    
-    elif convention == "zyx":
-        x = torch.nn.functional.normalize(baseline, dim=-1)
-        y = torch.nn.functional.normalize(approach, dim=-1)
-        z = torch.nn.functional.normalize(torch.linalg.cross(x, y), dim=-1)
-        
-        # Ensure x is aligned with the up direction
-        dot_product = torch.sum(x * up_direction, dim=-1, keepdim=True)  # dot product with up direction
-        # x = torch.where(dot_product < 0, -x, x)  # Flip x if it's pointing downward
-
-    # Construct the rotation matrix
-    rotation_matrices = torch.stack([x, y, z], dim=-1)  # Shape (B, 3, 3)
-
-    # Step 6: Construct the homogeneous transformation matrix
-    # Create a (B, 4, 4) tensor to store the transformation matrix
-    homogeneous_matrices = torch.zeros((x.shape[0], 4, 4), dtype=x.dtype, device=x.device)
-
-    # Place the rotation matrix in the top-left 3x3 block
-    homogeneous_matrices[:, :3, :3] = rotation_matrices
-
-    # Place the translation vector in the top-right 3x1 block
-    homogeneous_matrices[:, :3, 3] = translation
-
-    # Set the bottom row to [0, 0, 0, 1] for each matrix
-    homogeneous_matrices[:, 3, 3] = 1
-
-    if quat:
-        quaternion = matrix_to_quaternion(rotation_matrices)
-        poses = torch.cat([translation, quaternion], dim=-1)
-        return poses
-        
-    return homogeneous_matrices
-
-<<<<<<< HEAD
-=======
-
-def contact_from_rotations(rotation_matrices, convention="xzy"):
-    """
-    Extract the contact frame from the rotation matrix.
-    convention follows: baseline, approach, up
-    """
-    if convention == "xzy":
-        baseline = rotation_matrices[..., 0, :]
-        approach = rotation_matrices[..., 2, :]
-    elif convention == "zyx":
-        baseline = rotation_matrices[..., 2, :]
-        approach = rotation_matrices[..., 1, :]
-    return baseline, approach
-
-
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
-def contact_from_quaternion(quaternions, convention="xzy"):
-    """
-    Extract the contact frame from the rotation matrix.
-    convention follows: baseline, approach, up
-    """
-    rotation_matrix = quaternion_to_matrix(quaternions)
-    
-    if convention == "xzy":
-        baseline = rotation_matrix[..., 0, :]
-        approach = rotation_matrix[..., 2, :]
-    elif convention == "zyx":
-        baseline = rotation_matrix[..., 2, :]
-        approach = rotation_matrix[..., 1, :]
-    return baseline, approach
-
-<<<<<<< HEAD
-=======
-
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
-def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
-                color=[0.7, 0.1, 0.1], graspline_width=5e-4, finger_length=0.025,
-                arm_length=0.02, sphere_radius=2e-3):
-    
-    vis_list = []
-    color_max = np.array([1, 1, 1])  # Light red (RGB)
-    color_min = np.array([0, 0, 0])
-    cp_half = (cp + cp2) / 2
-
-    if cp is not None and cp2 is not None:
-        for i, (q, a, app, half_q, half_a) in enumerate(zip(cp, cp2, approach, 
-                                                           cp_half - approach * finger_length, 
-                                                           cp_half - approach * (finger_length + arm_length))):
-            # Determine color based on score
-            color = color_max * score[i] + color_min * (1 - score[i]) if score is not None else color
-            
-            # Draw fingers and arm cylinders
-            vis_list.extend([
-                create_cylinder_between_points(a - app * finger_length, a, radius=graspline_width, color=color),
-                create_cylinder_between_points(q - app * finger_length, q, radius=graspline_width, color=color),
-                create_cylinder_between_points(q - app * finger_length, a - app * finger_length, radius=graspline_width, color=color),
-                create_cylinder_between_points(half_q, half_a, radius=graspline_width, color=color)
-            ])
-            
-            # Draw bin_vectors lines if provided
-            if bin_vectors is not None:
-                bin_vectors_np = bin_vectors.detach().cpu().numpy() if isinstance(bin_vectors, torch.Tensor) else bin_vectors
-                for vec in bin_vectors_np[i]:
-                    line = o3d.geometry.LineSet()
-                    line.points = o3d.utility.Vector3dVector([half_q, half_q + vec * 0.1])
-                    line.lines = o3d.utility.Vector2iVector([[0, 1]])
-                    line.colors = o3d.utility.Vector3dVector([color])
-                    vis_list.append(line)
-
-            # Draw spheres if kappa is provided
-            if kappa is not None:
-                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=sphere_radius * kappa[i] / 10)
-                sphere.paint_uniform_color(color)
-                sphere.translate(q - app * finger_length)
-                vis_list.append(sphere)
-    
-    return vis_list
-
-<<<<<<< HEAD
-=======
-
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
-def gram_schmidt(batch_a, batch_b):
-    """
-    Perform 1-to-1 Gram-Schmidt process where batch_a is processed w.r.t batch_b.
-    
-    Args:
-    - batch_a: Tensor of shape (M, 3), the first batch of vectors to process.
-    - batch_b: Tensor of shape (M, 3), the second batch of vectors (reference).
-    
-    Returns:
-    - processed_a: Tensor of shape (M, 3), orthonormalized version of batch_a w.r.t. batch_b.
-    - normalized_b: Tensor of shape (M, 3), normalized version of batch_b.
-    """
-    # Normalize batch_b
-    norm_b = torch.norm(batch_b, dim=1, keepdim=True)
-    normalized_b = batch_b / norm_b
-
-    # Orthogonalize batch_a with respect to normalized_b
-    projection = (torch.sum(batch_a * normalized_b, dim=1, keepdim=True) * normalized_b)
-    orthogonal_a = batch_a - projection
-
-    # Normalize orthogonal_a
-    norm_a = torch.norm(orthogonal_a, dim=1, keepdim=True)
-    processed_a = orthogonal_a / norm_a
-
-    return processed_a
-
-<<<<<<< HEAD
-@beartype
-def random_time(min_time: Union[float, int], 
-                max_time: Union[float, int],
-                device: Union[str, torch.device] = "cpu",
-                dtype: Optional[torch.dtype] = None) -> torch.Tensor:
-    device = torch.device(device)
-    assert min_time <= max_time and min_time > 0.00001
-    min_time = torch.tensor([float(min_time)], device=device)
-    max_time = torch.tensor([float(max_time)], device=device)
-
-    time = (min_time/max_time + torch.rand(1, device = min_time.device, dtype=min_time.dtype) * (1-min_time/max_time))*max_time   # Shape: (1,)
-    #time = torch.exp(torch.rand_like(max_time) * (torch.log(max_time)-torch.log(min_time)) + torch.log(min_time)) 
-    if dtype is not None:
-        time = time.to(dtype=dtype)
-    return time
-=======
-
-def vis_grasps(
-        samples = None,
-        groups=None,
-        cp_gt=None,
-        cp2_gt=None,
-        cp=None,
-        cp2=None,
-        kappa=None,
-        approach_gt=None,
-        approach=None,
-        bin_vectors=None,
-        bin_vectors_gt=None,
-        score=None,
-    ):
-
-        vis_list = []
-
-        if approach is not None:
-            approach = (approach.detach().cpu().numpy() if isinstance(approach, torch.Tensor) else approach)
-        if approach_gt is not None:
-            approach_gt = (approach_gt.detach().cpu().numpy() if isinstance(approach_gt, torch.Tensor) else approach_gt)
-        if cp is not None:
-            cp = cp.detach().cpu().numpy() if isinstance(cp, torch.Tensor) else cp
-            cp2 = cp2.detach().cpu().numpy() if isinstance(cp2, torch.Tensor) else cp2
-        if cp_gt is not None:
-            cp_gt = cp_gt.detach().cpu().numpy() if isinstance(cp_gt, torch.Tensor) else cp_gt
-            cp2_gt = cp2_gt.detach().cpu().numpy() if isinstance(cp2_gt, torch.Tensor) else cp2_gt
-        if score is not None:
-            score = score.cpu().numpy() if isinstance(score, torch.Tensor) else score
-        if kappa is not None:
-            kappa = kappa.detach().cpu().numpy() if isinstance(kappa, torch.Tensor) else kappa
-
-        # Visualize the sampled points
-        if samples is not None:
-            samples = samples.cpu().numpy() if isinstance(samples, torch.Tensor) else samples
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(samples)
-            vis_list.append(pcd)
-
-        # Connect line between the cp_gt anchor and the cp
-        if cp_gt is not None and cp is not None:
-            for q, a in zip(cp, cp_gt):
-                line = o3d.geometry.LineSet()
-                line.points = o3d.utility.Vector3dVector([a, q])
-                line.lines = o3d.utility.Vector2iVector([[0, 1]])
-                line.colors = o3d.utility.Vector3dVector(
-                    np.tile([0.1, 0.1, 0.7], (1, 1))
-                )
-                vis_list.append(line)
-
-        if groups is not None:
-            rgb_groups = torch.rand((groups.shape[0], 3))
-            groups = (
-                groups.cpu().numpy() if isinstance(groups, torch.Tensor) else groups
-            )
-            rgb_groups = (
-                rgb_groups.cpu().numpy()
-                if isinstance(rgb_groups, torch.Tensor)
-                else rgb_groups
-            )
-            pcds_groups = []
-            for i in range(groups.shape[0]):
-                pcd = o3d.geometry.PointCloud()
-                # pcd.points = o3d.utility.Vector3dVector(groups[i] + samples[i])
-                pcd.points = o3d.utility.Vector3dVector(groups[i])
-                pcd.colors = o3d.utility.Vector3dVector(
-                    np.tile(rgb_groups[i], (groups.shape[1], 1))
-                )
-                pcds_groups.append(pcd)
-
-            vis_list += pcds_groups
-
-        if cp is not None:
-            vis_list += draw_grasps(cp, cp2, approach, bin_vectors, score, kappa)
-        #if cp_gt is not None:
-            #vis_list += draw_grasps(cp_gt, cp2_gt, approach_gt, bin_vectors_gt, score, None, color=[0.1, 0.7, 0.1])
-
-        return vis_list
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
