@@ -1,0 +1,2 @@
+[console_scripts]
+pointcloud_subscriber_node = vmf_contact_main.pointcloud_subscriber_node:main
