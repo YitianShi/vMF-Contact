@@ -16,6 +16,11 @@ print(torch.__version__)
 print("Cuda available: ", torch.cuda.is_available())
 print("Cuda device number: ", torch.cuda.device_count())
 
+data_path = os.environ.get("LSDFPROJECTS")
+if data_path is None or not os.path.exists(data_path):
+    data_path = "../.."
+print(f"Current data path: {data_path}")
+
 from vmf_contact import vmfContactModule
 from vmf_contact import DATASET_REGISTRY
 from openpoints.utils import EasyConfig
@@ -49,7 +54,7 @@ def get_args_parser(
     parser.add_argument(
         "--devices",
         type=int,
-        default=1,
+        default=4,
         help="Distributed training device number",
     )
     parser.add_argument(
@@ -64,7 +69,7 @@ def get_args_parser(
         help="Learning rate",
     )
     parser.add_argument(
-        "--learning_rate_flow",
+        "--learning_rate_score",
         type=float,
         default=3e-4,
         help="Learning rate",
@@ -83,7 +88,7 @@ def get_args_parser(
     parser.add_argument(
         "--max_epochs",
         type=int,
-        default=4000,
+        default=20000,
         help="Maximum number of epochs",
     )
     parser.add_argument(
@@ -137,7 +142,7 @@ def get_args_parser(
         "--data-root-dir",
         type=str,
         help="Root directory of the data",
-        default="data_all",
+        default="dataset/vmf_data",
     )
     parser.add_argument(
         "--num_workers",
@@ -213,7 +218,7 @@ def get_args_parser(
         "--point_backbone",
         type=str,
         default=None,
-        choices=["pointnet++", "pointnext-s", "pointnext-b", "spotr", "dgcnn"],
+        choices=["pointnet++", "pointnext-s", "pointnext-b", "pointnext-l","spotr", "dgcnn"],
     )
     # Flow
     parser.add_argument(
@@ -262,15 +267,16 @@ def get_args_parser(
             5e-2,
             0.1,
         ],
-        #data_root_dir="../../data_all/data_debug",
-        data_root_dir=glob.glob("../../data_all/data*"),
-        data_root_dir_test=["../../data_all/data4"],
-        data_root_dir_debug=["../../data_all/data_debug"],
+        #data_root_dir=f"{data_path}/dataset/vmf_data/data_debug",
+        data_root_dir=glob.glob(f"{data_path}/dataset/vmf_data/data*"),
+        data_root_dir_test=[f"{data_path}/dataset/vmf_data/data4"],
+        data_root_dir_debug=[f"{data_path}/dataset/vmf_data/data_debug"],
     )
     return parser
 
 
 import yaml
+print(f"{data_path}/dataset/vmf_data/data*")
 def parse_args_from_yaml(config_path: str):
     # Load default configurations from YAML
     with open(config_path, 'r') as f:
@@ -316,23 +322,27 @@ def main_module(
     args.point_backbone_cfgs = point_backbone_cfgs
 
     # Initialize logger if needed
-    if args.experiment is not None:
-        remote_logger = WandbLogger()
-        cast(Run, remote_logger.experiment).config.update(
-            {
-                "seed": os.getenv("PL_GLOBAL_SEED"),
-                "dataset": args.dataset,
-                "flow_type": "residual",
-                "flow_layers": args.flow_layers,
-                "certainty_budget": args.certainty_budget,
-                "learning_rate": args.learning_rate,
-                "learning_rate_decay": args.learning_rate_decay,
-                "max_epochs": args.max_epochs,
-                "entropy_weight": args.entropy_weight,
-                "flow_finetune": args.flow_finetune,
-                "run_finetuning": args.run_finetuning,
-            }
-        )
+    if args.experiment is not None and not args.debug:
+        remote_logger = WandbLogger(name=args.experiment, project="vmf_contact")
+        try:
+            remote_logger.experiment.config.update(
+                {
+                    "seed": os.getenv("PL_GLOBAL_SEED"),
+                    "dataset": args.dataset,
+                    "flow_type": "residual",
+                    "flow_layers": args.flow_layers,
+                    "certainty_budget": args.certainty_budget,
+                    "learning_rate": args.learning_rate,
+                    "learning_rate_decay": args.learning_rate_decay,
+                    "max_epochs": args.max_epochs,
+                    "entropy_weight": args.entropy_weight,
+                    "flow_finetune": args.flow_finetune,
+                    "run_finetuning": args.run_finetuning,
+                }
+            )
+        except:
+            print("Dummy remote logger")
+            remote_logger = None
     else:
         remote_logger = None
 
@@ -369,5 +379,7 @@ def main_module(
 
 
 if __name__ == "__main__":
-    args = get_args_parser(add_help=True).parse_args()
-    main_module(args)
+    current_file_folder = os.path.dirname(os.path.abspath(__file__))
+    #args = get_args_parser(add_help=True).parse_args()
+    main_module(parse_args_from_yaml(current_file_folder + "/config.yaml"))
+    #main_module(args)

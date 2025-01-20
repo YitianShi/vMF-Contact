@@ -20,7 +20,10 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "pointcloud_subscriber_node = vmf_contact_main.pointcloud_subscriber_node:main",
+            "giga = ros2_nodes.inference_node_giga:main",
+            "giga_active = ros2_nodes.inference_node_giga_active:main",
+            "vmf = ros2_nodes.inference_node_vmf:main",
+            "vlm = ros2_nodes.inference_node_vlm:main",
         ],
     },
 )

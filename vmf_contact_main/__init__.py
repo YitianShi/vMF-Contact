@@ -1,7 +1,6 @@
 import logging
-import warnings
-from .vmf_contact.model import vmfContactModule
-from .vmf_contact.datasets import DATASET_REGISTRY
+import sys
+sys.path.append('..')
 
 _root_logger = logging.getLogger()
 _logger = logging.getLogger(__name__)
