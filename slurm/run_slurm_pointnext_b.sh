@@ -26,8 +26,4 @@ echo "Allocated CPUs: $SLURM_CPUS_ON_NODE"
 echo "Allocated GPUs: $SLURM_JOB_GPUS"
 
 # Execute your script or command
-<<<<<<< HEAD
-python vmf_contact_main/train.py --point_backbone pointnext-b --experiment diffusion_pointnext_s # --ckpt epoch=78-step=30257 
-=======
 python vmf_contact_main/train.py --point_backbone pointnext-b --experiment diffusion_pointnext_b # --ckpt epoch=78-step=30257 
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718

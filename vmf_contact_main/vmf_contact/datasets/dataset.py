@@ -372,7 +372,7 @@ def compute_normal_map(pcd_img: torch.Tensor) -> torch.Tensor:
 
 if __name__ == "__main__":
     # Create dataset and dataloader
-    data_root_dir = "dataset/vmf_data"
+    data_root_dir = "data_all"
     npz_dataset = MGNDataset(data_root_dir)
     # Example of iterating through the dataloader
     npz_dataloader = DataLoader(

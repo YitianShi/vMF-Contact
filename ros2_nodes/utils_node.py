@@ -2,7 +2,7 @@ import numpy as np
 from geometry_msgs.msg import Pose, PoseStamped, Transform, TransformStamped
 from tf_transformations import quaternion_from_matrix, quaternion_matrix, translation_from_matrix
 from vmf_contact_main.active_grasp.spatial import SpatialTransform
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation as R
 
 # Function to mark duplicates with a number
 def mark_duplicates(labels):
@@ -17,6 +17,26 @@ def mark_duplicates(labels):
         result.append(f"{label}_{label_count[label]}")
     
     return result
+
+def swap_z(quaternion):
+    """
+    Apply a 90-degree rotation around the Z-axis in the body's local coordinate system.
+
+    Parameters:
+        quaternion (tuple): A quaternion in (x, y, z, w) format.
+
+    Returns:
+        tuple: The new quaternion after applying the body transformation in (x, y, z, w) format.
+    """
+    # Define a 90-degree rotation around the Z-axis in quaternion form (x, y, z, w)
+    angle = np.pi / 2  # 90 degrees in radians
+    rotation_z_90 = R.from_euler('z', angle).as_quat()  # Returns (x, y, z, w)
+
+    # Perform quaternion multiplication (body transformation)
+    q_result = R.from_quat(quaternion) * R.from_quat(rotation_z_90)
+
+    # Convert back to (x, y, z, w) format
+    return q_result.as_quat()
 
 
 def pose_from_spacial_transform(spacial_transform: SpatialTransform) -> Pose:
@@ -140,10 +160,10 @@ def apply_transform_to_pose(pose, transform):
 
     # Convert current pose quaternion to rotation matrix
     current_quat = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
-    current_rot = Rotation.from_quat(current_quat)
+    current_rot = R.from_quat(current_quat)
 
     # Convert rotation vector to rotation matrix
-    delta_rot = Rotation.from_rotvec([rx, ry, rz])
+    delta_rot = R.from_rotvec([rx, ry, rz])
 
     # Apply the rotation change by combining rotations
     new_rot = delta_rot * current_rot 

@@ -4,10 +4,14 @@ import rclpy
 import sensor_msgs.msg as sensor_msgs
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from arm_api2_msgs.action import MoveCartesian, MoveCartesianPath
+from action_msgs.msg import GoalStatus
+from arm_api2_msgs.action import MoveCartesian, MoveCartesianPath, MoveJoint
+from arm_api2_msgs.srv import ChangeState, SetVelAcc, SetStringParam
 from control_msgs.action import GripperCommand
-from control_msgs.msg import GripperCommand as GripperCommandMsg
-from geometry_msgs.msg import PoseStamped, TransformStamped
+from control_msgs.msg import GripperCommand as GripperCommandMsg, JointJog
+from control_msgs.action import GripperCommand
+from controller_manager_msgs.srv import SwitchController
+from geometry_msgs.msg import PoseStamped, TransformStamped, TwistStamped
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
@@ -16,6 +20,7 @@ from tf2_sensor_msgs.tf2_sensor_msgs import transform_points
 from cv_bridge import CvBridge
 import cv2
 import os, torch
+from typing import List
 import numpy as np
 import copy
 from tf_transformations import quaternion_matrix
@@ -24,10 +29,9 @@ import tf2_geometry_msgs
 from .utils_node import *
 from lang_sam import LangSAM
 from PIL import Image
-
 from vmf_contact_main.camera_utils import *
 from vmf_contact_main.active_grasp.spatial import *
-
+import signal
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
 
 #image_pil = Image.open("./assets/car.jpeg").convert("RGB")
@@ -51,6 +55,23 @@ class AIRNode(Node):
 
     def __init__(self, use_langsam=False):
         super().__init__("pcd_subsriber_node")
+        self._action_client_cartesian = ActionClient(self, MoveCartesian, "arm/move_to_pose")
+        self._action_client_joint = ActionClient(self, MoveJoint, "arm/move_to_joint")
+        self._action_client_cartesian_path = ActionClient(self, MoveCartesianPath, "arm/move_to_pose_path")
+        self._action_client_gripper = ActionClient(self, GripperCommand, "arm/gripper_control")
+ 
+        self._service_client_state_change = self.create_client(ChangeState, "arm/change_state")
+        self._service_client_setvelacc = self.create_client(SetVelAcc, "arm/set_vel_acc")
+        self._service_client_seteelink = self.create_client(SetStringParam, "arm/set_eelink")
+        self._service_client_switch_controller = self.create_client(SwitchController, "controller_manager/switch_controller")
+
+        self._publisher_twist_cmd = self.create_publisher(TwistStamped, "/moveit2_iface_node/delta_twist_cmds", 10)
+        self._publisher_joint_vel_cmd = self.create_publisher(JointJog, "/moveit2_iface_node/delta_joint_cmds", 10)
+
+        self._subscriber_current_ee_pose = self.create_subscription(PoseStamped, "/arm/state/current_pose", self.current_pose_callback, 1)
+
+        self.logger = self.get_logger()
+        self._current_ee_pose = PoseStamped()
         
         self.stitched_pointcloud_topic = "/cloud_stitched"  
         self.grasp_result_topic = "/detect_grasps/clustered_grasps" 
@@ -124,6 +145,57 @@ class AIRNode(Node):
         self.drop_off_pose: PoseStamped = list_to_pose_stamped([0.15, -0.75, 1.3, 1.0, 0.0, 0.0, 0.0], "world")
 
         self.langsam_model = LangSAM() if use_langsam else None
+
+    
+    def to_camera_ready_pose(self):
+        self.change_state_to_cartesian_ctl()
+        self.set_eelink("tcp")
+        self.send_goal(self.camera_ready_pose)
+        self.open_gripper()
+
+
+    def current_pose_callback(self, msg):
+        self._current_ee_pose = msg
+        if self.shutdown:
+            raise SystemExit
+
+
+    def get_current_ee_pose(self):
+        """
+        Returns the current end effector pose. EE link is set by the set_eelink service.
+
+        Returns:
+            PoseStamped: The current end effector pose.
+        """
+        return self._current_ee_pose
+
+    
+    def set_vel_acc(self, max_vel_scaling: float, max_acc_scaling: float):
+        """
+        Sends a request to the service server to set the velocity and acceleration scaling factors.
+
+        !!! IMPORTANT: This function is blocking until the service server response is received
+        This function must be not called in the main thread. Otherwise will cause a deadlock.
+
+        Args:
+            max_vel_scaling (float): The maximum velocity scaling factor. In the range [0.0, 1.0].
+            max_acc_scaling (float): The maximum acceleration scaling factor. In the range [0.0, 1.0].
+
+        Returns:
+            bool: True if the service server response was received, False otherwise.
+        """
+        request = SetVelAcc.Request()
+        request.max_vel = max_vel_scaling
+        request.max_acc = max_acc_scaling
+
+        self.logger.info(" ArmApi2Client: Waiting for service server...")
+
+        self._service_client_setvelacc.wait_for_service()
+
+        self.logger.info(" ArmApi2Client: set_vel_acc request sent, waiting for response...")
+
+        self._service_client_setvelacc.call_async(request)    
+
 
     def get_camera_info(self):
         while True:
@@ -342,11 +414,11 @@ class AIRNode(Node):
     
     def change_view(self, pose_robot_2_camera):
 
+        self.change_state_to_cartesian_ctl()
+        self.set_eelink("camera_color_optical_frame")
         self.get_logger().info("Sending goal now...")
 
-        pose_stamped, pose_world_2_camera = self.camera_robot_pose_to_tcp_world_pose(pose_robot_2_camera)
-
-        self.publish_new_frame(f"camera_target_view_velocity", pose_stamped_from_pose(pose_world_2_camera, "world"))
+        pose_stamped, = pose_stamped_from_pose(pose_robot_2_camera)
         
         self.stop_event.clear()
         self.movement_failed_flag.clear()
@@ -382,36 +454,19 @@ class AIRNode(Node):
                     return False
         return True
 
-    def execute_grasp(self, pose, frame = "base_link"):
 
+    def execute_grasp(self, grasp_pose, frame = "base_link"):
+
+        self.change_state_to_cartesian_ctl()
         self.get_logger().info("Sending goal now...")
 
-        if isinstance(pose, np.ndarray):
-            pose = list(pose)
-            self.get_logger().info(f"Grasp pose: {pose}")
-            # pose = pose[4:] + pose[:4]
-            pose = list_to_pose(pose)
-
-        elif isinstance(pose, SpatialTransform):
-            print(pose.translation)
-            pose = pose_from_spacial_transform(pose)
-
-        grasp_pose = pose_stamped_from_pose(pose, frame)
-
-        grasp_pose = self.transform_pose_z(grasp_pose, z_offset=0.04) # GIGA is predicting the position of the finger end, so we need to move it a bit in z direction to the tcp
-
-        
-        t_world_2_base_link = self.tf_buffer.lookup_transform(
-            "world", frame, rclpy.time.Time()
-        )
-
         # transform posestamped from base_link to world using t_world_2_base_link
+        t_world_2_base_link = self.tf_buffer.lookup_transform("world", frame, rclpy.time.Time())
         grasp_pose.pose = tf2_geometry_msgs.do_transform_pose(grasp_pose.pose, t_world_2_base_link)
         grasp_pose.header.frame_id = "world"
-        
-        pregrasp_pose = self.create_pregrasp_pose(copy.deepcopy(grasp_pose))
-
         self.publish_new_frame("grasp", grasp_pose)
+
+        pregrasp_pose = self.create_pregrasp_pose(copy.deepcopy(grasp_pose))
         self.publish_new_frame("pregrasp", pregrasp_pose)
         
         # ask if the user wants to continue
@@ -427,7 +482,7 @@ class AIRNode(Node):
                 if self.stop_event.is_set():
                     self.stop_event.clear()
                     self.get_logger().info("Goal cancelled")
-                    self.send_goal(self.camera_ready_pose)
+                    self.to_camera_ready_pose()
                     state_machine_state = MOVING_TO_CAMERA_READY
                     self.get_logger().info("StateMachine switched to MOVING_TO_CAMERA_READY")
 
@@ -518,7 +573,7 @@ class AIRNode(Node):
                     if self.gripper_movement_finished_flag.is_set():
                         self.gripper_movement_finished_flag.clear()
                         # Send the goal to move to the camera ready pose
-                        self.send_goal(self.camera_ready_pose)
+                        self.to_camera_ready_pose()
                         state_machine_state = MOVING_TO_CAMERA_READY
                         self.get_logger().info("StateMachine switched to MOVING_TO_CAMERA_READY")
                     if self.gripper_movement_failed_flag.is_set():
@@ -639,6 +694,222 @@ class AIRNode(Node):
             )
 
             self._send_goal_future.add_done_callback(self.robot_goal_response_callback)
+
+
+    def set_eelink(self, eelink_name: str):
+        """
+        Sends a request to the service server to set the end effector link name.
+
+        !!! IMPORTANT: This function is blocking until the service server response is received
+        This function must be not called in the main thread. Otherwise will cause a deadlock.
+
+        Args:
+            eelink_name (str): The name of the end effector link.
+
+        Returns:
+            bool: True if the service server response was received, False otherwise.
+        """
+        request = SetStringParam.Request()
+        request.value = eelink_name
+
+        self.logger.info(" ArmApi2Client: Waiting for service server...")
+
+        self._service_client_seteelink.wait_for_service()
+
+        self.logger.info(f" ArmApi2Client: set_eelink as {eelink_name} request sent, waiting for response...")    
+
+        response = self._service_client_seteelink.call_async(request)
+
+        # if response.success:
+        #     self.logger.info(f" ArmApi2Client: End effector link set to {eelink_name}")
+        # else:
+        #     self.logger.info(f" ArmApi2Client: Setting end effector link to {eelink_name} failed")
+
+        # return response.success
+        return True
+
+    
+    def change_state_to(self, state: str):
+        """
+        Sends a request to the service server to change the arm state to the specified state.
+
+        !!! IMPORTANT: This function is blocking until the service server response is received
+        This function must be not called in the main thread. Otherwise will cause a deadlock.
+
+        Args:
+            state (str): The state to change the arm to. One of "JOINT_TRAJ_CTL", "CART_TRAJ_CTL", "SERVO_CTL"
+
+        Returns:
+            bool: True if the service server response was received, False otherwise.
+        """
+        request = ChangeState.Request()
+        request.state = state
+
+        self.logger.info(" ArmApi2Client: Waiting for service server...")
+
+        self._service_client_state_change.wait_for_service()
+
+        self.logger.info(" ArmApi2Client: change_state request sent, waiting for response...")    
+
+        response = self._service_client_state_change.call_async(request)
+
+        # if response.success:
+        #     self.logger.info(f" ArmApi2Client: State changed to {state}")
+        # else:
+        #     self.logger.info(f" ArmApi2Client: State change to {state} failed")
+
+        # return response.success
+        return True
+
+
+    def change_state_to_joint_ctl(self):
+        """
+        Sends a request to the service server to change the arm state to joint control.
+
+        !!! IMPORTANT: This function is blocking until the service server response is received 
+        This function must be not called in the main thread. Otherwise will cause a deadlock.
+
+        Returns:
+            bool: True if the service server response was received, False otherwise.
+        """
+        res1 = self.switch_controller_for_joint_cartesian_ctl()
+        res2 = self.change_state_to("JOINT_TRAJ_CTL")
+        return res1 and res2
+    
+    
+    def change_state_to_cartesian_ctl(self):
+        """
+        Sends a request to the service server to change the arm state to cartesian control.
+
+        !!! IMPORTANT: This function is blocking until the service server response is received 
+        This function must be not called in the main thread. Otherwise will cause a deadlock.
+
+        Returns:
+            bool: True if the service server response was received, False otherwise.
+        """
+        res1 = self.switch_controller_for_joint_cartesian_ctl()
+        res2 = self.change_state_to("CART_TRAJ_CTL")
+        return res1 and res2
+    
+
+    def change_state_to_servo_ctl(self):
+        """
+        Sends a request to the service server to change the arm state to servo control.
+
+        !!! IMPORTANT: This function is blocking until the service server response is received 
+        This function must be not called in the main thread. Otherwise will cause a deadlock.
+
+        Returns:
+            bool: True if the service server response was received, False otherwise.
+        """
+        
+        res1 = self.switch_controller_for_servo_ctl()
+        res2 = self.change_state_to("SERVO_CTL")
+        return res1 and res2
+    
+    
+    def switch_controller(self, start_controllers: List[str], stop_controllers: List[str]):
+        """
+        Sends a request to the service server to switch controllers.
+
+        !!! IMPORTANT: This function is blocking until the service server response is received 
+        This function must be not called in the main thread. Otherwise will cause a deadlock.
+
+        reference about available controllers in UR ROS2 driver: 
+        https://docs.universal-robots.com/Universal_Robots_ROS2_Documentation/doc/ur_robot_driver/ur_robot_driver/doc/usage/controllers.html#commanding-controllers
+
+        Args:
+            start_controllers (List[str]): The controllers to start.
+            stop_controllers (List[str]): The controllers to stop.
+
+        Returns:
+            bool: True if the controllers were switched, False otherwise.
+        """
+        request = SwitchController.Request()
+        request.start_controllers = start_controllers
+        request.stop_controllers = stop_controllers
+        request.strictness = 2 # STRICT=2, BEST_EFFORT=1
+
+        self.logger.info(" ArmApi2Client: Waiting for service server...")
+
+        self._service_client_switch_controller.wait_for_service()
+
+        self.logger.info(" ArmApi2Client: switch_controller request sent, waiting for response...")    
+
+        response = self._service_client_switch_controller.call_async(request)
+
+        # if response.ok:
+        #     self.logger.info(f" ArmApi2Client: Controllers switched")
+        # else:
+        #     self.logger.info(f" ArmApi2Client: Switching controllers failed")
+
+        # return response.ok
+        return True
+
+
+    def switch_controller_for_servo_ctl(self):
+        """
+        Sends a request to the service server to switch controllers to servo control.
+
+        !!! IMPORTANT: This function is blocking until the service server response is received
+        This function must be not called in the main thread. Otherwise will cause a deadlock.
+
+        Returns:
+            bool: True if the controllers were switched, False otherwise.
+        """
+        stop_controllers = ["scaled_joint_trajectory_controller"]
+        start_controllers = ["forward_position_controller"]
+        return self.switch_controller(start_controllers, stop_controllers)
+
+    
+    def switch_controller_for_joint_cartesian_ctl(self):
+        """
+        Sends a request to the service server to switch controllers to joint and cartesian control.
+
+        !!! IMPORTANT: This function is blocking until the service server response is received
+        This function must be not called in the main thread. Otherwise will cause a deadlock.
+
+        Returns:
+            bool: True if the controllers were switched, False otherwise.
+        """
+        stop_controllers = ["forward_position_controller"]
+        start_controllers = ["scaled_joint_trajectory_controller"]
+        return self.switch_controller(start_controllers, stop_controllers)
+
+    
+    def send_joint_vel_cmd(self, joint_names: List[str], joint_velocities: List[float], base_frame: str = "base_link"):
+        """
+        Sends a joint velocity command to the joint velocity command topic.
+
+        Args:
+            joint_names (List[str]): The names of the joints to send the velocity command to.
+            joint_velocities (List[float]): The velocities to send to the joints.
+        """
+        msg = JointJog()
+        msg.joint_names = joint_names
+        msg.velocities = joint_velocities
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = base_frame
+        self._publisher_joint_vel_cmd.publish(msg)
+
+    
+    def send_twist_cmd(self, twist_list):
+        """
+        Sends a twist command to the twist command topic.
+
+        Args:
+            TwistStamped_msg (TwistStamped): The twist command to send.
+        """
+        twist_stamped = TwistStamped()
+        twist_stamped.twist.linear.x = twist_list[0]
+        twist_stamped.twist.linear.y = twist_list[1]
+        twist_stamped.twist.linear.z = twist_list[2]
+        twist_stamped.twist.angular.x = twist_list[3]
+        twist_stamped.twist.angular.y = twist_list[4]
+        twist_stamped.twist.angular.z = twist_list[5]
+        twist_stamped.header.stamp = self.get_clock().now().to_msg()
+        self._publisher_twist_cmd.publish(twist_stamped)
+
 
     def robot_goal_response_callback(self, future):
         self.goal_handle = future.result()

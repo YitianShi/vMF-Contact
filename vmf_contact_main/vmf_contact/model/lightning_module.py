@@ -1,16 +1,12 @@
 from typing import Any, Dict, Tuple, cast
-<<<<<<< HEAD
-from ..datasets import DataModule
-from .utils import *
-=======
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 
 import numpy as np
 import open3d as o3d
 import pytorch_lightning as pl
 import torch
 from torch.nn import functional as F
-from ..nn import vmfContact, ConditionalUnet1D, UncertaintyEstimator
+from ..nn import BayesianLoss, UncertaintyEstimator, vmfContact
+from ..metrics import AUSC
 from openpoints.cpp.chamfer_dist import ChamferDistanceL1
 from openpoints.optim import build_optimizer_from_cfg
 from openpoints.scheduler import build_scheduler_from_cfg
@@ -21,11 +17,10 @@ import os
 
 Batch = Tuple[torch.Tensor, torch.Tensor]
 loss_terms_orientation = {
-    # "baseline": 1,
-    # "approach": 1,
-    # "grasp_width": 10,
-    # "graspness": 0.1,
-    "diffusion": 1,
+    "baseline": 1,
+    "approach": 1,
+    "grasp_width": 10,
+    "graspness": 0.1,
 }
 
 
@@ -70,31 +65,18 @@ class vmfContactLightningModule(pl.LightningModule):
 
         self.learning_rate_decay = args.learning_rate_decay
         self.learning_rate = args.learning_rate
-        self.learning_rate_score = args.learning_rate_score
+        self.learning_rate_flow = args.learning_rate_flow
         self.gradient_accumulation_steps = args.gradient_accumulation_steps
 
-<<<<<<< HEAD
-        self.encoder = vmfContact(
-=======
         self.grasp_buffer = GraspBuffer(device=self.device)
 
         self.model = vmfContact(
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
             args=args,
             image_size=args.image_size,
             embedding_dim=args.embedding_dim,
             scale=args.scale,
             prob_baseline=args.prob_baseline,
             pcd_with_rgb=args.pcd_with_rgb,
-            diffusion = True
-        )
-
-        self.score_model = ConditionalUnet1D(
-            9,
-            global_cond_dim=args.embedding_dim,
-            diffusion_step_embed_dim=256,
-            down_dims=256,
-            cond_predict_scale=True
         )
 
         self.uncertainty_estimator = UncertaintyEstimator(
@@ -106,6 +88,11 @@ class vmfContactLightningModule(pl.LightningModule):
             gmm_components=flow_gmm_components,
         )
 
+        self.loss = BayesianLoss(args.entropy_weight)
+
+        # We have continuous output
+        self.ausc = AUSC(loss_terms_orientation.keys(), baseline_unc=self.prob_baseline)
+
         self.reconstruction_loss = ChamferDistanceL1()
 
     def training_step(self, batch, _batch_idx: int):
@@ -113,14 +100,6 @@ class vmfContactLightningModule(pl.LightningModule):
         self.forward_and_loss(batch)
 
         self.log(
-<<<<<<< HEAD
-            "diffusion",
-            self.losses["diffusion"],
-            prog_bar=True,
-            batch_size=self.batch_size,
-        )
-
-=======
             "bsl",
             self.losses["baseline"],
             prog_bar=True,
@@ -132,9 +111,8 @@ class vmfContactLightningModule(pl.LightningModule):
             prog_bar=True,
             batch_size=self.batch_size,
         )
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
         if "flow_loss" in self.losses.keys():
-            self.log( 
+            self.log(
                 "flow",
                 self.losses["flow_loss"],
                 prog_bar=True,
@@ -198,42 +176,43 @@ class vmfContactLightningModule(pl.LightningModule):
         return loss
 
     def on_validation_epoch_end(self):
-        self.encoder.train()
+        self.log_dict(self.ausc.compute(), prog_bar=True)
+        self.ausc.reset()
+        self.model.train()
 
-<<<<<<< HEAD
-    def test_step(self, batch, _batch_idx):        
-=======
     def test_step(self, batch, _batch_idx):
         self.uncertainty_estimator.flow.eval()        
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
         self.forward_and_loss(batch, val=True)
         loss = sum(list(self.losses.values()))
 
         self.log_dict(self.losses, sync_dist=True, batch_size=self.batch_size)
-        self.log("val/loss", loss, sync_dist=True, prog_bar=True, batch_size=self.batch_size)
-
+        self.log(
+            "val/loss", loss, sync_dist=True, prog_bar=True, batch_size=self.batch_size
+        )
         if self.training:
             self.lr_schedulers().step(loss)
         return loss
 
     def configure_optimizers(self) -> Dict[str, Any]:
-        optimizer_grouped_parameters_score = {
+        optimizer_grouped_parameters_flow = {
                 "params": [],
                 "weight_decay": 0,
-                "lr": self.learning_rate_score,
+                "lr": self.learning_rate_flow,
                 "betas": (0.9, 0.999),
                 "eps": 1e-08,
             }
 
-        for _, param in self.score_model.named_parameters():
-            optimizer_grouped_parameters_score["params"].append(param)
+        for _, param in self.uncertainty_estimator.named_parameters():
+            optimizer_grouped_parameters_flow["params"].append(param)
 
-        optimizer = build_optimizer_from_cfg(self.encoder, 
+        optimizer = build_optimizer_from_cfg(self.model, 
                                               lr=self.learning_rate, 
                                               **self.args.point_backbone_cfgs.optimizer)
         scheduler = build_scheduler_from_cfg(self.args.point_backbone_cfgs, 
                                               optimizer)
-        optimizer.add_param_group(optimizer_grouped_parameters_score)
+        
+        optimizer.add_param_group(optimizer_grouped_parameters_flow)
+
         config = {
             "optimizer": optimizer,
             "lr_scheduler": scheduler,
@@ -285,9 +264,12 @@ class vmfContactLightningModule(pl.LightningModule):
         normals = input_batch["normals"]
         self.batch_size = pcd.shape[0]
 
+        if self.prob_baseline == "post" and self.training:
+            self.uncertainty_estimator.update_lipschitz()
+
         # List of ground-truth contact points positions
         self.gt_pos_bt = list(gt_sample["gt_pt"] for gt_sample in gt_batch)
-        pred = self.encoder(pcd, self.gt_pos_bt, debug=self.debug)
+        pred = self.model(pcd, self.gt_pos_bt, debug=self.debug)
 
         self.losses = {}
 
@@ -295,9 +277,6 @@ class vmfContactLightningModule(pl.LightningModule):
         self.position_assignment_to_gt = pred["matched_ind"]
         self._compute_cp_loss(pred)
         self._compute_orientation_loss(pred, gt_batch, pcd=pcd[..., :3], normals=normals)
-<<<<<<< HEAD
-        # self._compute_reconstruction_loss(pred, input_batch["pcd_gt"])
-=======
         self._compute_reconstruction_loss(pred, input_batch["pcd_gt"])
 
         for k,v in self.losses.items():
@@ -308,18 +287,18 @@ class vmfContactLightningModule(pl.LightningModule):
 
         if self.prob_baseline == "post":
            self._flow_loss(pred)
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 
         return pred        
             
     def _compute_reconstruction_loss(self, pred, pcds):
-        pred_pcd_bt =  pred["reconstructed_pcds"]
+        pred_pcd_bt = pred["reconstructed_pcds"]
         self.losses["reconstruction_loss"] = self.reconstruction_loss(pred_pcd_bt, pcds)
         if self.debug:
             for pred_pcd, pcd in zip(pred_pcd_bt, pcds):
                 self._vis_pcd(pred_pcd.view(-1, 3), pcd)
         self.losses["reconstruction_loss"] *= self.reconstruction_loss_coeff / self.batch_size 
         
+    
     def _compute_cp_loss(self, pred):
         # Find the closest ground-truth contact point for each predicted contact point in each level
         self.losses["cp_loss"] = 0
@@ -339,109 +318,163 @@ class vmfContactLightningModule(pl.LightningModule):
         self.losses["cp_loss"] /= self.batch_size
         self.losses["cp_loss"] *= self.cp_loss_coeff
 
-    def _compute_orientation_loss(self, pred, gt_batch, normals, pcd, 
-                                  diffusion_schedules =[[1.0, 0.15], [0.15, 0.01]],
-                                  ang_mult = 1):
-
-        
+    def _compute_orientation_loss(self, pred, gt_batch, normals, pcd):
         for loss_term in loss_terms_orientation.keys():
             self.losses[loss_term] = 0
 
+        # Get the ground-truths
+        baseline_gt_bt = list(gt_sample["gt_baseline"] for gt_sample in gt_batch)
+        approach_gt_bt = list(gt_sample["gt_approach"] for gt_sample in gt_batch)
+        width_gt_bt = list(gt_sample["gt_width"] for gt_sample in gt_batch)
+        graspness_gt_bt = list(gt_sample["gt_scores"] for gt_sample in gt_batch)
+
         # Get the predictions
-        cp_features = pred["cp_features"]
+        baselines_bt = pred["baseline"]
+        bin_scores_bt = pred["bin_score"]
+        features_bt = pred["cp_features"]
+        width_bt = pred["grasp_width"]
+        graspness_bt = pred["graspness"]
+
+        # Get the normals
+        sample_ids = pred["sample_ids"]
 
         for i in range(self.batch_size):
             pair_ind = self.position_assignment_to_gt[i]
 
-            gt_sample = gt_batch[i]
-            cp = pred["contact_point"][i][pair_ind[1]]
-            cp_gt = gt_sample["gt_pt"][pair_ind[0]]
-            baseline_gt = gt_sample["gt_baseline"][pair_ind[0]]
-            approach_gt = gt_sample["gt_approach"][pair_ind[0]]
-            width_gt = gt_sample["gt_width"][pair_ind[0]]
+            # Baseline vector loss
+            if "baseline" in loss_terms_orientation.keys():
+                baseline_gt = baseline_gt_bt[i][pair_ind[0]]
+                baseline_params = baselines_bt[i][pair_ind[1]]
+                baseline = (
+                    baseline_params[..., :3]
+                    if self.prob_baseline is not None
+                    else baseline_params
+                )
+                baseline = torch.nn.functional.normalize(baseline, dim=-1)
+                feature = features_bt[i][pair_ind[1]].unsqueeze(0)
+                normal = normals[i][sample_ids[i]]
+                if self.prob_baseline == "post":
+                    cp = pred["contact_point"][i][pair_ind[1]]
 
-            gt_poses = rotation_from_contact(
-                baseline_gt,
-                approach_gt,
-                cp_gt,
-                quat=True,
-            )
+                    baseline = baseline_params[..., :3] 
+                    # Update the posterior of the baseline vector
+                    baseline_post = self.uncertainty_estimator.posterior_update(
+                        feature, baseline_params, prior=-normal
+                    )
+                    # Compute the loss
+                    baseline_loss = self.loss.forward(baseline_post, baseline_gt)
 
-<<<<<<< HEAD
-            time_in = torch.empty(0, device=self.device)
-            T_diffused = torch.empty(0,4, device=self.device)
-            gt_ang_score = torch.empty(0,3, device=self.device)
-            global_cond = torch.empty(0,self.encoder.embedding_dim, device=self.device)
-            
-            if self.training and not self.debug:
+                    # Update the AUSC metric
+                    baseline = baseline_post.mu_post
+                    kappa = baseline_post.kappa_likelihood
+                    kappa_post = baseline_post.kappa_post
+                    if not self.training:
+                        self.ausc.update(baseline, baseline_gt, "baseline")
+                        self.ausc.update(kappa, key="kappa_lh")
+                        self.ausc.update(kappa_post, key="kappa_post")
+                        
+                elif self.prob_baseline == "lh":
+                    # Compute the likelihood distribution of the baseline vector
+                    baseline_lh = self.uncertainty_estimator.likelihood_update(
+                        baseline_params
+                    )
+                    # Compute the negative log-likelihood
+                    baseline_loss = baseline_lh.negative_log_likelihood(baseline_gt)
 
-                for time_schedule in diffusion_schedules:
-                    time = random_time(min_time=time_schedule[1], max_time=time_schedule[0], device=self.device) # Shape: (1,)
-                    T_diffused_, delta_T, time_in_, gt_ang_score_, gt_ang_score_ref_ = self.score_model.diffuse_T_target(
-                                                                                                        gt_poses[..., 3:], 
-                                                                                                        time=time.to(self.device))
-                    
-                    T_diffused = torch.cat([T_diffused, T_diffused_], dim=0)
-                    time_in = torch.cat([time_in, time_in_], dim=0)
-                    gt_ang_score = torch.cat([gt_ang_score, gt_ang_score_], dim=0)
-                    global_cond_ = cp_features[i][pair_ind[1]]
-                    global_cond = torch.cat([global_cond, global_cond_], dim=0)
+                    # Update the AUSC metric
+                    baseline = baseline_lh.mu
+                    kappa = baseline_lh.kappa
+                    if not self.training:
+                        self.ausc.update(baseline, baseline_gt, "baseline")
+                        self.ausc.update(kappa, key = "kappa_lh")
+                else:
+                    # Compute the cosine similarity loss between the baseline vectors and the ground truth
+                    baseline_loss = (
+                        1 - F.cosine_similarity(baseline, baseline_gt, dim=-1).mean()
+                    )
+                    kappa = None
 
-                ang_score = self.score_model(T_diffused, timestep=time_in, global_cond = global_cond)
-                gt_ang_score = gt_ang_score * torch.sqrt(time[..., None]) * ang_mult
-                self.losses["diffusion"] += F.mse_loss(ang_score, gt_ang_score)
-=======
+                    # Update the AUSC metric
+                    if not self.training:
+                        self.ausc.update(baseline, baseline_gt, "baseline")
+
+                self.losses["baseline"] = (
+                    self.losses["baseline"] + baseline_loss
+                )
+
+            if "approach" in loss_terms_orientation.keys():
+                # Compute the approach vector loss
+                approach_gt = approach_gt_bt[i][pair_ind[0]]
+                bin_score = bin_scores_bt[i][pair_ind[1]]
+
+                # Regression to the ground-truth approach vector
+                #approach = bin_score[:, :3]
+                #approach = torch.nn.functional.normalize(approach, dim=-1)
+                #approach = gram_schmidt(approach, baseline)
+                #approach_loss = 1 - F.cosine_similarity(approach, approach_gt, dim=-1).mean()
+                
+                # Classification to the ground-truth approach vector
+                bin_num = bin_score.shape[-1]
+                bin_vectors = rotate_circle_to_batch_of_vectors(bin_num, baseline)  # rotate the bin circle to align with the baseline vector
+                # Compute the cosine similarity between each bin vector with the only ground-truth approach vector as ground truth bin score
+                bin_score_gt = torch.sum(bin_vectors * approach_gt.unsqueeze(1), dim=-1)
+                
+                # Compute the l1 loss between the bin score gt and the sigmoid bin score
+                approach_loss = F.l1_loss(bin_score, bin_score_gt, reduction="mean")                
+                approach = torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
+                # approach = torch.nn.functional.normalize(approach, dim=-1)
+                self.losses["approach"] = self.losses["approach"] + approach_loss
+                # Update the AUSC metric
+                if not self.training:
+                    self.ausc.update(approach, approach_gt, "approach")
+
+            # Compute the grasp width loss
+            if "grasp_width" in loss_terms_orientation:
+                width_gt = width_gt_bt[i][pair_ind[0]]
+                width = width_bt[i][pair_ind[1]]
+                width_loss = F.huber_loss(width, width_gt)
+                self.losses["grasp_width"] = self.losses["grasp_width"] + width_loss
+                if not self.training:
+                    self.ausc.update(width, width_gt, "grasp_width")
+
+            if "graspness" in loss_terms_orientation:
+                # Compute the graspness loss
+                graspness_gt = graspness_gt_bt[i][pair_ind[0]]
+
+                graspness_gt_all = torch.zeros(
+                    graspness_bt[i].size(0),
+                    dtype=torch.float,
+                    device=self.device,
+                )
+                graspness_gt_all[pair_ind[1]] = 1.
+
+                weight_mask = torch.where(
+                    graspness_gt_all > 0, 2., 1.,
+                )
+
+                graspness_loss = F.binary_cross_entropy_with_logits(
+                    graspness_bt[i], graspness_gt_all, weight=weight_mask
+                )
+
+                self.losses["graspness"] = self.losses["graspness"] + graspness_loss
+                self.ausc.update(graspness_bt[i], graspness_gt_all, "graspness")
+
             # Visualize the predicted contact points and the baseline vector
             if self.debug:  
             # if self.losses["baseline"] > 1.8:   
                 filter = torch.randint(0, pred["contact_point"][i][pair_ind[1]].shape[0], (100,), device=pred["contact_point"][i][pair_ind[1]].device)
                 # group_point_pos = pred["group_point_pos"][-1][i]
                 cp = pred["contact_point"][i][pair_ind[1]]
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
                 
-            else:
-                init_seed = torch.tensor([0., 1., 0., 0.], device=self.device).repeat(gt_poses.size(0), 1)
-                global_cond_ = cp_features[i][pair_ind[1]]
-                poses = self.score_model.sample(init_seed, global_cond=global_cond_, diffusion_schedules=diffusion_schedules)
-                baselines, approaches = contact_from_quaternion(poses)
                 
-                self.losses["diffusion"] += (1 - F.cosine_similarity(baselines[-1], baseline_gt, dim=-1).mean())
-                self.losses["diffusion"] += (1 - F.cosine_similarity(approaches[-1], approach_gt, dim=-1).mean())
+                #pt = o3d.geometry.PointCloud()
+                #pt.points = o3d.utility.Vector3dVector(cp[filter].detach().cpu().numpy())
+                #pt.normals = o3d.utility.Vector3dVector(normal[filter].cpu().numpy())
+                #pt_2 = pcd[i]
+                #pt_2 = o3d.geometry.PointCloud()
+                #pt_2.points = o3d.utility.Vector3dVector(pcd[i].cpu().numpy())
+                #o3d.visualization.draw_geometries([pt, pt_2], point_show_normal=True)
 
-<<<<<<< HEAD
-                if self.debug:
-                    vis = o3d.visualization.Visualizer()
-                    vis.create_window()
-                    os.makedirs("diff", exist_ok=True)
-                    for t in range(baselines.size(0)):
-                        t = -1
-                        # Clear geometries from the previous frame
-                        vis.clear_geometries()
-                        
-                        baseline, approach = baselines[t], approaches[t]
-                        geometry = self.vis_grasps(
-                            samples= pcd[i],
-                            groups=None,
-                            #cp_gt=cp_gt,
-                            #cp2_gt=cp_gt + width_gt.unsqueeze(-1) * baseline_gt,
-                            cp=cp,
-                            cp2=cp + width_gt.unsqueeze(-1) * baseline,
-                            #approach_gt=approach_gt,
-                            approach=approach,
-                            #bin_vectors=bin_vectors * bin_score.sigmoid().unsqueeze(-1).detach(),
-                            #bin_vectors_gt=bin_vectors * bin_score_gt.unsqueeze(-1).detach(),
-                        )
-                        # Add the new geometry for the current frame
-                        for geom in geometry:
-                            vis.add_geometry(geom)
-                        
-                        # Update the visualizer
-                        vis.poll_events()
-                        vis.update_renderer()
-                        
-                        # Wait a bit to slow down the animation, adjust as needed
-                        vis.capture_screen_image(f"diff/frame_{t:04d}.png", do_render=True)
-=======
                 # cp_vis1 = o3d.geometry.PointCloud()
                 # cp_vis1.points = o3d.utility.Vector3dVector(cp.cpu().numpy())
                 # cp_vis1.normals = o3d.utility.Vector3dVector(baseline.cpu().numpy())
@@ -469,7 +502,6 @@ class vmfContactLightningModule(pl.LightningModule):
                     #bin_vectors_gt=bin_vectors * bin_score_gt.unsqueeze(-1).detach(),
                 )
                 o3d.visualization.draw_geometries(vis_list)
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 
         for k, v in loss_terms_orientation.items():
             self.losses[k] *= v / self.batch_size
@@ -501,91 +533,6 @@ class vmfContactLightningModule(pl.LightningModule):
         # Make layers Lipschitz continuous
         self.losses["flow_loss"] = loss / self.batch_size * self.flow_loss_coeff
 
-<<<<<<< HEAD
-    def vis_grasps(
-        self,
-        samples = None,
-        groups=None,
-        cp_gt=None,
-        cp2_gt=None,
-        cp=None,
-        cp2=None,
-        kappa=None,
-        approach_gt=None,
-        approach=None,
-        bin_vectors=None,
-        bin_vectors_gt=None,
-        score=None,
-    ):
-
-        vis_list = []
-        # Visualize the sampled points
-        if samples is not None:
-            samples = samples.cpu().numpy() if isinstance(samples, torch.Tensor) else samples
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(samples)
-            vis_list.append(pcd)
-        
-
-
-        if approach is not None:
-            approach = (approach.detach().cpu().numpy() if isinstance(approach, torch.Tensor) else approach)
-        if approach_gt is not None:
-            approach_gt = (approach_gt.detach().cpu().numpy() if isinstance(approach_gt, torch.Tensor) else approach_gt)
-        if cp is not None:
-            cp = cp.detach().cpu().numpy() if isinstance(cp, torch.Tensor) else cp
-            cp2 = cp2.detach().cpu().numpy() if isinstance(cp2, torch.Tensor) else cp2
-        if cp_gt is not None:
-            cp_gt = cp_gt.detach().cpu().numpy() if isinstance(cp_gt, torch.Tensor) else cp_gt
-            cp2_gt = cp2_gt.detach().cpu().numpy() if isinstance(cp2_gt, torch.Tensor) else cp2_gt
-        if score is not None:
-            score = score.cpu().numpy() if isinstance(score, torch.Tensor) else score
-        if kappa is not None:
-            kappa = kappa.detach().cpu().numpy() if isinstance(kappa, torch.Tensor) else kappa
-
-        # Connect line between the cp_gt anchor and the cp
-        if cp_gt is not None and cp is not None:
-            for q, a in zip(cp, cp_gt):
-                line = o3d.geometry.LineSet()
-                line.points = o3d.utility.Vector3dVector([a, q])
-                line.lines = o3d.utility.Vector2iVector([[0, 1]])
-                line.colors = o3d.utility.Vector3dVector(
-                    np.tile([0.1, 0.1, 0.7], (1, 1))
-                )
-                vis_list.append(line)
-
-        if groups is not None:
-            rgb_groups = torch.rand((groups.shape[0], 3))
-            groups = (
-                groups.cpu().numpy() if isinstance(groups, torch.Tensor) else groups
-            )
-            rgb_groups = (
-                rgb_groups.cpu().numpy()
-                if isinstance(rgb_groups, torch.Tensor)
-                else rgb_groups
-            )
-            pcds_groups = []
-            for i in range(groups.shape[0]):
-                pcd = o3d.geometry.PointCloud()
-                # pcd.points = o3d.utility.Vector3dVector(groups[i] + samples[i])
-                pcd.points = o3d.utility.Vector3dVector(groups[i])
-                pcd.colors = o3d.utility.Vector3dVector(
-                    np.tile(rgb_groups[i], (groups.shape[1], 1))
-                )
-                pcds_groups.append(pcd)
-
-            vis_list += pcds_groups
-
-        if cp is not None:
-            vis_list += draw_grasps(cp, cp2, approach, bin_vectors, score, kappa)
-        if cp_gt is not None:
-            vis_list += draw_grasps(cp_gt, cp2_gt, approach_gt, bin_vectors_gt, score, None, color=[0.1, 0.7, 0.1])
-
-        o3d.visualization.draw_geometries(vis_list)
-        return vis_list
-
-=======
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
     def inference(self, 
         pcd, 
         pcd_num = 20000,
@@ -608,7 +555,7 @@ class vmfContactLightningModule(pl.LightningModule):
 
         with torch.no_grad():
             self.uncertainty_estimator.flow.eval()
-            out = self.encoder(pcd)
+            out = self.model(pcd)
             predictions["contact_point"] = out["contact_point"].squeeze(0)
 
             baseline_params = out["baseline"]
@@ -652,48 +599,9 @@ class vmfContactLightningModule(pl.LightningModule):
         if not valid_grasp:
             print("No valid grasp")
             return None
-<<<<<<< HEAD
-
-        # print(f"Number of grasps: {filter.sum()}")
-
-        cp = cp[filter]
-        cp2 = cp2[filter]
-        mid_pt = (cp2 + cp) / 2
-        
-        baseline = predictions["baseline"][filter]
-        kappa = predictions["kappa"][filter]
-        approach = approach[filter]
-        graspness = graspness[filter]
-
-        if True:
-            self.vis_grasps(
-                samples=pcd,
-                cp=cp,
-                cp2=cp2,
-                kappa=kappa,
-                approach=approach,
-                score = graspness,
-            )
-        
-        # rotation approach to 6d pose
-        # approach is z, baseline is x
-        poses = rotation_from_contact(baseline=baseline, approach=approach, translation=mid_pt, convention=convention)
-
-        sample_num = min(sample_num, poses.size(0))
-        # sort poses by graspness
-        poses_candidates = poses[torch.argsort(kappa, descending=True)][:sample_num] # TODO: change to graspness
-
-        #randomly sample 1 poses
-        sample_num = min(sample_num, poses_candidates.size(0))
-        pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
-        
-        print("Chosen pose", pose_chosen)
-        return pose_chosen.cpu().numpy()
-=======
         self.grasp_buffer.vis_grasps(all=True)
         pose_chosen = self.grasp_buffer.get_pose_curr_best(convention=convention, sample_num=sample_num)
         
         print("Chosen pose", pose_chosen)
         return pose_chosen.cpu().numpy()
         
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718

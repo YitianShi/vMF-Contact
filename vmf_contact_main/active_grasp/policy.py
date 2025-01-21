@@ -10,13 +10,15 @@ from dataclasses import dataclass
 from .networks import VGN
 import open3d as o3d
 
+qual_thresh = .7
+
 class Policy():
     def __init__(self):
         self.load_parameters()
         self.shutdown = False
 
     def load_parameters(self):
-        self.qual_thresh = .9
+        self.qual_thresh = qual_thresh
 
     def activate(self, bbox, view_sphere, intrinsic):
         self.intrinsic = intrinsic
@@ -76,7 +78,7 @@ class SingleViewPolicy(Policy):
             tsdf_grid = self.tsdf.get_grid()
 
             scene_cloud = self.tsdf.get_map_cloud()
-            o3d.visualization.draw_geometries([scene_cloud])
+            # o3d.visualization.draw_geometries([scene_cloud])
             out = self.vgn(tsdf_grid)
 
             grasps, qualities = self.filter_grasps(out, q)
@@ -106,7 +108,7 @@ class MultiViewPolicy(Policy):
             self.tsdf.integrate(img, self.intrinsic, x.inv() * self.T_base_task)
 
         scene_cloud = self.tsdf.get_map_cloud()
-        o3d.visualization.draw_geometries([scene_cloud])
+        # o3d.visualization.draw_geometries([scene_cloud])
 
         with Timer("grasp_prediction"):
             tsdf_grid = self.tsdf.get_grid()

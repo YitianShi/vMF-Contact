@@ -2,7 +2,7 @@ import itertools
 from numba import jit
 import numpy as np
 
-from .policy import MultiViewPolicy
+from .policy import MultiViewPolicy, qual_thresh
 from .timer import Timer
 
 
@@ -111,7 +111,7 @@ class NextBestView(MultiViewPolicy):
             t = (self.T_task_base * self.best_grasp.pose).translation
             i, j, k = (t / self.tsdf.voxel_size).astype(int)
             qs = self.qual_hist[:, i, j, k]
-            if np.count_nonzero(qs) == self.T and np.mean(qs) > 0.9:
+            if np.count_nonzero(qs) == self.T and np.mean(qs) > qual_thresh:
                 return True
         return False
 

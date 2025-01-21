@@ -29,7 +29,7 @@ linear_vel = 0.1
 angular_vel = 1
 control_rate = 30
 policy_rate = 4
-qual_th = 0.6
+qual_th = 0.8
 
 class State:
     def __init__(self, tsdf):
@@ -60,7 +60,7 @@ class AIRNodeGIGA(AIRNode):
                                 force_detection=True, 
                                 qual_th=qual_th, 
                                 out_th=0.1, 
-                                visualize=False)
+                                visualize=True)
         elif model_type == "giga":
             self.agent = VGNImplicit(model_path, 
                                         model_type=model_type, 
@@ -76,9 +76,8 @@ class AIRNodeGIGA(AIRNode):
         self.user_input_thread.start()
   
     def handle_user_input(self):
-    
+        self.to_camera_ready_pose()
         self.get_camera_info()
-
         while True:
             self.send_goal(self.camera_ready_pose)
             self.open_gripper()
@@ -89,7 +88,8 @@ class AIRNodeGIGA(AIRNode):
                     continue
                 grasp = self.agent_inference(d) 
                 if grasp is not None:
-                    success = self.execute_grasp(grasp, frame="origin_giga")
+                    pose = self.process_grasp(grasp)
+                    success = self.execute_grasp(pose, frame="origin_giga")
                     if success:
                         self.get_logger().info("Grasp successful.")
                 else:
@@ -97,6 +97,12 @@ class AIRNodeGIGA(AIRNode):
             elif user_input == "q":
                 self.shutdown = True
                 break
+    
+    def process_grasp(self, grasp):
+        pose = list_to_pose(grasp.tolist())
+        pose = pose_stamped_from_pose(pose, "base_link")
+        pose = self.transform_pose_z(pose, z_offset=0.05) 
+        return pose
             
     def agent_inference(self, depth_imgs):
         if self.last_depth_msg is None or self.camera_matrix is None:
@@ -114,10 +120,18 @@ class AIRNodeGIGA(AIRNode):
 
         state = State(tsdf=tsdf_volume)
         # Perform inference
-        grasps, scores, toc = self.agent(state)
-        grasp_best = grasps[scores.argmax()].pose.to_list()
+        grasps, scores, toc, scene = self.agent(state)
 
-        grasp_best = np.concatenate([grasp_best[4:],grasp_best[:4]]) # [x, y, z, qx, qy, qz, qw] -> [qx, qy, qz, qw, x, y, z]
+        poses = []
+
+        for i, (grasp, score) in enumerate(zip(grasps, scores)):
+            pose = np.concatenate([grasp.pose.to_list()[4:],swap_z(grasp.pose.to_list()[:4])])
+            poses.append(pose)
+            self.publish_new_frame(f"grasp_{i}", list_to_pose_stamped(pose, "origin_giga"))
+        scene.show()
+
+        grasp_best = poses[np.argmax(scores)]
+
         self.get_logger().info(f"Best grasp pose: {grasp_best}")
 
         return grasp_best

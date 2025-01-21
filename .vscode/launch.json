@@ -17,11 +17,10 @@
       "request": "launch",
       "program": "${workspaceFolder}/vmf_contact_main/train.py",
       "console": "integratedTerminal",
-      "args": ["--debug"],
       "env": {
         //"TORCH_USE_CUDA_DSA": "1",
         //"CUDA_LAUNCH_BLOCKING": "1",
-        //"CUDA_VISIBLE_DEVICES": "0",
+        //"CUDA_VISIBLE_DEVICES": "4"
       }
     //"justMyCode": false
     },

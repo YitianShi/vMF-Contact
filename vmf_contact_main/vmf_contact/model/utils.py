@@ -2,10 +2,6 @@ import numpy as np
 import open3d as o3d
 import torch
 from typing import Union, Optional
-<<<<<<< HEAD
-from beartype import beartype
-from ..nn.output.transforms import matrix_to_quaternion, quaternion_to_matrix
-=======
 
 #### Codes borrowed from pytorch3d ####
 
@@ -1082,7 +1078,6 @@ def quaternion_identity(n: int, device: Optional[torch.device] = None, dtype: Op
 def se3_from_r3(x: torch.Tensor) -> torch.Tensor:
     return torch.cat([torch.ones_like(x[...,0:1]), torch.zeros_like(x[...,:3]), x], dim=-1)
 
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 
 def rotate_circle_to_batch_of_vectors(bin_num, target_vectors):
     u_batch = perpendicular_highest_z(target_vectors)
@@ -1202,10 +1197,7 @@ def create_cylinder_between_points(p1, p2, radius=0.05, color=[0.1, 0.1, 0.7]):
 
     return cylinder
 
-<<<<<<< HEAD
-=======
 
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 def over_or_re_sample(pcd, num_points):
     c = pcd.shape[-1]
     # Determine the maximum size
@@ -1220,10 +1212,7 @@ def over_or_re_sample(pcd, num_points):
         pcd = torch.gather(pcd, 0, indices.unsqueeze(-1).expand(-1, c))
     return pcd
 
-<<<<<<< HEAD
-=======
 
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 def rotation_from_contact(baseline, approach, translation, convention = "xzy", quat=False):
     """
     Compute the rotation matrix from the baseline and approach vectors.
@@ -1275,8 +1264,6 @@ def rotation_from_contact(baseline, approach, translation, convention = "xzy", q
         
     return homogeneous_matrices
 
-<<<<<<< HEAD
-=======
 
 def contact_from_rotations(rotation_matrices, convention="xzy"):
     """
@@ -1292,7 +1279,6 @@ def contact_from_rotations(rotation_matrices, convention="xzy"):
     return baseline, approach
 
 
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 def contact_from_quaternion(quaternions, convention="xzy"):
     """
     Extract the contact frame from the rotation matrix.
@@ -1308,10 +1294,7 @@ def contact_from_quaternion(quaternions, convention="xzy"):
         approach = rotation_matrix[..., 1, :]
     return baseline, approach
 
-<<<<<<< HEAD
-=======
 
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
                 color=[0.7, 0.1, 0.1], graspline_width=5e-4, finger_length=0.025,
                 arm_length=0.02, sphere_radius=2e-3):
@@ -1355,10 +1338,7 @@ def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
     
     return vis_list
 
-<<<<<<< HEAD
-=======
 
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718
 def gram_schmidt(batch_a, batch_b):
     """
     Perform 1-to-1 Gram-Schmidt process where batch_a is processed w.r.t batch_b.
@@ -1385,23 +1365,6 @@ def gram_schmidt(batch_a, batch_b):
 
     return processed_a
 
-<<<<<<< HEAD
-@beartype
-def random_time(min_time: Union[float, int], 
-                max_time: Union[float, int],
-                device: Union[str, torch.device] = "cpu",
-                dtype: Optional[torch.dtype] = None) -> torch.Tensor:
-    device = torch.device(device)
-    assert min_time <= max_time and min_time > 0.00001
-    min_time = torch.tensor([float(min_time)], device=device)
-    max_time = torch.tensor([float(max_time)], device=device)
-
-    time = (min_time/max_time + torch.rand(1, device = min_time.device, dtype=min_time.dtype) * (1-min_time/max_time))*max_time   # Shape: (1,)
-    #time = torch.exp(torch.rand_like(max_time) * (torch.log(max_time)-torch.log(min_time)) + torch.log(min_time)) 
-    if dtype is not None:
-        time = time.to(dtype=dtype)
-    return time
-=======
 
 def vis_grasps(
         samples = None,
@@ -1481,4 +1444,3 @@ def vis_grasps(
             #vis_list += draw_grasps(cp_gt, cp2_gt, approach_gt, bin_vectors_gt, score, None, color=[0.1, 0.7, 0.1])
 
         return vis_list
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718

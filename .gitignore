@@ -4,12 +4,6 @@ __pycache__
 *.pth
 .venv
 *.ckpt
-<<<<<<< HEAD
-slurm/logs_slurm/*
-diff
-wandb
-=======
 logs_slurm/*
 diff
 wandb
->>>>>>> ba0bdf2105f2c4629a750e75e6d249cbbc678718

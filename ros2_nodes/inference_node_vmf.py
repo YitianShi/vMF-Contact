@@ -86,10 +86,8 @@ class AIRNodevMF(AIRNode):
     
     
     def handle_user_input(self):
-
         while True:
-            self.send_goal(self.camera_ready_pose)
-            self.open_gripper()
+            self.to_camera_ready_pose()
             user_input = input("Enter 's' to start next capture and 'q' to quit: ")
             if user_input == "s":
                 (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
@@ -99,12 +97,18 @@ class AIRNodevMF(AIRNode):
 
                 grasp, grasp_criterien = self.agent_inference(pcd)
                 if grasp is not None:
-                    success = self.execute_grasp(grasp)
+                    pose = self.process_grasp(grasp)
+                    success = self.execute_grasp(pose)
                 else:
                     print("No grasp pose detected, please try again.")
             elif user_input == "q":
                 self.shutdown = True
                 break
+
+    def process_grasp(self, pose):
+        pose = list_to_pose(pose)
+        pose = pose_stamped_from_pose(pose, "base_link")
+        return pose
 
     def VLM_inference(self, pose: Pose, rgb, d):
         # Extract the current pose

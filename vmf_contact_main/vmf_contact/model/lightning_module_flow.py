@@ -29,7 +29,7 @@ class vmfContactFlowLightningModule(pl.LightningModule):
         self.batch_size = args.batch_size
         self.automatic_optimization = False
 
-        self.learning_rate_flow = 3e-4
+        self.learning_rate_flow = args.learning_rate_flow
         self.gradient_accumulation_steps = args.gradient_accumulation_steps
 
         self.model = vmfContact(
