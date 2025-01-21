@@ -8,3 +8,5 @@ termcolor
 shortuuid
 easydict
 normflows
+xitorch
+beartype

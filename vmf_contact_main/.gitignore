@@ -1,5 +1,4 @@
 pic_debug
-wandb
 logs
 __pycache__
 *.pth

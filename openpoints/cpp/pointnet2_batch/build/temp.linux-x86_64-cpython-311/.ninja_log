@@ -1,0 +1,10 @@
+# ninja log v5
+1	83062	1733949844	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-311/src/group_points.o	f3b7f0d5b4bb6a7c
+10	84083	1733949845	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-311/src/interpolate.o	53fdfaee613e185f
+0	84125	1733949845	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-311/src/ball_query.o	c299fdcbe1ec5588
+75	85227	1733949846	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-311/src/sampling.o	296e9568389048cf
+38	133080	1733949894	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-311/src/pointnet2_api.o	e40f018c25f6cb31
+1	143833	1733949905	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-311/src/ball_query_gpu.o	47ab038f685ee49e
+14	144459	1733949905	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-311/src/interpolate_gpu.o	bf25984e9d7d7f69
+7	144599	1733949906	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-311/src/group_points_gpu.o	ead55bb136d834e2
+103	145630	1733949907	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-311/src/sampling_gpu.o	2e65c7cdcd58afb1

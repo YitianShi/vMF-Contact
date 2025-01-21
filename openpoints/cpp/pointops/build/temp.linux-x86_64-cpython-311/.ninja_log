@@ -1,0 +1,16 @@
+# ninja log v5
+326	148834	1733950059	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/subtraction/subtraction_cuda.o	2267a08c645167ba
+64	151377	1733950061	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/knnquery/knnquery_cuda.o	a634e01ef448d6
+4	152253	1733950062	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/ballquery/ballquery_cuda.o	5f827c02e5632b64
+42	152352	1733950062	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/interpolation/interpolation_cuda.o	3a20107fb4b35d95
+151	152505	1733950062	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/sampling/sampling_cuda.o	34b453c2428a8571
+0	152934	1733950063	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/aggregation/aggregation_cuda.o	8d9ddd912c8af07b
+15	152970	1733950063	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/grouping/grouping_cuda.o	1118186857b37001
+108	232378	1733950142	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/pointops_api.o	1a511c433bd191df
+387	248055	1733950158	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/subtraction/subtraction_cuda_kernel.o	e535099c0788a0d1
+88	248856	1733950159	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/knnquery/knnquery_cuda_kernel.o	d2a231e19ee014a4
+0	248881	1733950159	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/interpolation/interpolation_cuda_kernel.o	d799ae9b47d07712
+261	249194	1733950159	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/sampling/sampling_cuda_kernel.o	fcb6a980921c1aa6
+9	249363	1733950159	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/ballquery/ballquery_cuda_kernel.o	2771c81b7d2b1b95
+26	249368	1733950159	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/grouping/grouping_cuda_kernel.o	8f96c408dea659ac
+1	249372	1733950159	/hkfs/work/workspace/scratch/qs9960-sfbc06/vmf/openpoints/cpp/pointops/build/temp.linux-x86_64-cpython-311/src/aggregation/aggregation_cuda_kernel.o	368cc3167fde40e0

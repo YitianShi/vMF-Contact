@@ -15,7 +15,7 @@ services:
     shm_size: '40gb'
     volumes:
       - .:/vmf
-      - /media/HDD2/Yitian_data/data_all:/data_all
+      - /media/HDD2/Yitian_data/dataset/vmf_data:/dataset/vmf_data
     deploy:
       resources:
         reservations:

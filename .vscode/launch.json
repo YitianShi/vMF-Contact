@@ -9,7 +9,7 @@
       "type": "debugpy",
       "request": "launch",
       "program": "${file}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
     },
     {
       "name": "train",
@@ -17,30 +17,27 @@
       "request": "launch",
       "program": "${workspaceFolder}/vmf_contact_main/train.py",
       "console": "integratedTerminal",
-      "args": [
-        "--scale", "1.75",
-        "--batch-size", "2",
-        "--embedding_dim", "240",
-        //"--pcd_with_rgb",
-        "--learning_rate", "1e-5",
-        "--prob_baseline", "lh",
-        "--flow_layers", "8",
-        
-        "--point_backbone", "pointnext-b",
-        "--devices", "4",
-        "--debug",
-
-        //"--eval",
-        //"--run-finetuning",
-        "--flow_finetune", "0",
-        "--num_workers", "10"
-      ],
+      "args": ["--debug"],
       "env": {
         //"TORCH_USE_CUDA_DSA": "1",
         //"CUDA_LAUNCH_BLOCKING": "1",
-        //"CUDA_VISIBLE_DEVICES": "4"
+        //"CUDA_VISIBLE_DEVICES": "0",
       }
     //"justMyCode": false
+    },
+    {
+      "name": "remote",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/vmf_contact_main/remote_agent.py",
+      "console": "integratedTerminal",
+      "env": {
+        //"TORCH_USE_CUDA_DSA": "1",
+        //"CUDA_LAUNCH_BLOCKING": "1",
+        //"CUDA_VISIBLE_DEVICES": "4",
+        "MESA_GL_VERSION_OVERRIDE":"4.6"
+      },
+    "justMyCode": false
     },
     {
       "name": "flow",
