@@ -12,9 +12,9 @@ from vgn.perception import create_tsdf
 
 from .inference_node_base import *
 
-from vmf_contact_main.camera_utils import *
-from vmf_contact_main.active_grasp.policy import make, registry
-from vmf_contact_main.active_grasp.spatial import *
+from ros2_nodes.utils_camera import *
+from active_grasp.policy import make, registry
+from active_grasp.spatial import *
 
 import argparse
 
@@ -40,7 +40,7 @@ class AIRNodeGIGA(AIRNode):
     def __init__(self):
         super().__init__()
         
-        self.pcd_shift=np.array([-0.86, 0.1, 0.031])
+        self.pcd_shift=np.array([-0.86, 0.1, 0.0])
         self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
         self.publish_new_frame("center", self.pcd_center)
 
@@ -83,7 +83,7 @@ class AIRNodeGIGA(AIRNode):
             self.open_gripper()
             user_input = input("Enter 's' to start next capture and 'q' to quit: ")
             if user_input == "s":
-                (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
+                (pcd, rgb, d, cam_pose, _, _), identifier = self.process_point_cloud_and_rgbd()
                 if not identifier:
                     continue
                 grasp = self.agent_inference(d) 
@@ -100,7 +100,6 @@ class AIRNodeGIGA(AIRNode):
     
     def process_grasp(self, grasp):
         pose = list_to_pose(grasp.tolist())
-        pose = pose_stamped_from_pose(pose, "base_link")
         pose = self.transform_pose_z(pose, z_offset=0.05) 
         return pose
             

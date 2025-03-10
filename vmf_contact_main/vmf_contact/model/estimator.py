@@ -218,8 +218,8 @@ class vmfContactModule():
 
         # Train main module
         if ckpt_loaded or self.flow_finetune == 0:
-            logger.warning("Train main module from scratch.")
-            trainer.fit(main_module, data, ckpt_path=ckpt_loaded)
+            logger.warning("Train main module from checkpoint.")
+            trainer.fit(main_module, data)
         best_module = main_module
 
         # Fine-tune flow module

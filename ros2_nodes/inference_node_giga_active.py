@@ -9,11 +9,11 @@ from vgn.grasp import *
 
 from .inference_node_base import *
 
-from vmf_contact_main.camera_utils import *
-from vmf_contact_main.active_grasp.policy import make, registry
-from vmf_contact_main.active_grasp.bbox import AABBox
-from vmf_contact_main.active_grasp.spatial import *
-from vmf_contact_main.active_grasp.timer import Timer
+from ros2_nodes.utils_camera import *
+from active_grasp.policy import make, registry
+from active_grasp.bbox import AABBox
+from active_grasp.spatial import *
+from active_grasp.timer import Timer
 
 import argparse
 
@@ -22,8 +22,20 @@ from pathlib import Path
 
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
 
+
+BBOXES = {1: [9.3, 10.], 
+          2: [15., 17.], 
+          3: [8, 8], 
+          4: [23, 20], 
+          5: [7.5, 7], 
+          6: [11, 6.7], 
+          7: [10.7, 8.8], 
+          8: [9, 25.3] }
+
+O_SIZE, O_HEIGHT = BBOXES[4]
+O_SIZE /= 100
+O_HEIGHT /= 100
 O_RESOLUTION = 40
-O_SIZE = .3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
 min_z_dist = 0.3
 linear_vel = 1
@@ -37,8 +49,9 @@ class AIRNodeGIGAActive(AIRNode):
     def __init__(self):
         super().__init__()
         self.set_vel_acc(.5, .1)
+        self.camera_ready_pose = list_to_pose_stamped([-0.370, -0.612, 1.224, 0.942, 0.007, -0.005, 0.336], "world")
         
-        self.pcd_shift=np.array([-0.86, 0.1, 0.03])
+        self.pcd_shift=np.array([-0.73, 0.1, 0.])
         self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
         self.publish_new_frame("center", self.pcd_center)
 
@@ -47,12 +60,15 @@ class AIRNodeGIGAActive(AIRNode):
                     self.pcd_center.pose.position.z]
         upper = [self.pcd_center.pose.position.x + O_SIZE / 2,
                 self.pcd_center.pose.position.y + O_SIZE / 2,
-                self.pcd_center.pose.position.z + 0.3]
+                self.pcd_center.pose.position.z + O_HEIGHT]
         
         center = (np.array(lower) + np.array(upper)) / 2
         self.box_center = list_to_pose_stamped(center.tolist() + [0., 0., 0., 1.], "base_link")
-        self.publish_new_frame("box_center", self.box_center)
 
+        # self.publish_new_frame("box_center", self.box_center)
+        self.publish_new_frame("box_left_lower", list_to_pose_stamped(lower + [0., 0., 0., 1.], "base_link"))
+        self.publish_new_frame("box_right_upper", list_to_pose_stamped(upper + [0., 0., 0., 1.], "base_link"))
+       
         self.bbox: AABBox = AABBox(lower, upper)
         
         # Active search setting
@@ -66,7 +82,7 @@ class AIRNodeGIGAActive(AIRNode):
     def handle_user_input(self):
 
         self.get_camera_info()
-        success = False
+        self.record_videos()
         while True:
             # Move to the camera ready pose
             self.to_camera_ready_pose()
@@ -86,7 +102,7 @@ class AIRNodeGIGAActive(AIRNode):
                     self.get_logger().info("Searching for grasp...")
             
                     while not self.policy.done:
-                        (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
+                        (pcd, rgb, d, cam_pose, _, _), identifier = self.process_point_cloud_and_rgbd()
                         if not identifier:
                             self.get_logger().info("No object detected, please try again.")
                             continue
@@ -116,8 +132,7 @@ class AIRNodeGIGAActive(AIRNode):
         rotation = swap_z(grasp.pose.rotation.as_quat())
         pose = grasp.pose.translation.tolist() + rotation.tolist()
         pose = list_to_pose(pose)
-        grasp_pose = pose_stamped_from_pose(pose, "base_link")
-        grasp_pose = self.transform_pose_z(grasp_pose, z_offset=0.05) # GIGA is predicting the position of the finger end, so we need to move it a bit in z direction to the tcp
+        grasp_pose = self.transform_pose_z(pose, z_offset=0.05) # GIGA is predicting the position of the finger end, so we need to move it a bit in z direction to the tcp
         return grasp_pose
         
     def send_vel_cmd(self):
@@ -137,6 +152,7 @@ class AIRNodeGIGAActive(AIRNode):
             pose_robot_2_camera: Pose = transform_to_pose(t_robot_2_camera)
             pose_robot_2_camera_next = apply_transform_to_pose(pose_robot_2_camera, cmd) 
             self.publish_new_frame(f"camera_view_velocity", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link"))
+            # self.logger.info(f"View velocity: {cmd}")
         self.send_twist_cmd(cmd)
 
     def compute_velocity_cmd(self, x_d, x, linear_vel=0.05, angular_vel=1):

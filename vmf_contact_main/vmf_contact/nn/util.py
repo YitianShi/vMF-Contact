@@ -4,18 +4,9 @@ import os.path as osp
 import torch
 from scipy.optimize import linear_sum_assignment
 # warnings.warn("Unable to load pointnet2_ops cpp extension. JIT Compiling.")
-
+    
 
 def match(source, target, dist_th=0.01, hungarian=False):
-    """
-    Hungarian matching between source and target points
-    Args:
-        source: [B, N, 3] or [N, 3] - Batch of source point clouds or a single point cloud
-        target: List[] - Batch of target point clouds or a single point cloud
-    Returns:
-        distance: [B, N] or [N] - Minimum distance from each source point to the closest target point
-        index: [B, N] or [N] - Index of the closest target point for each source point
-    """
     if not isinstance(source, list):
         if source.dim() < 3:
             source = [source.detach()]  # Add batch dimension, resulting in [1, N, 3]

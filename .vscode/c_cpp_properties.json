@@ -7,7 +7,6 @@
       },
       "includePath": [
         "/home/yitian/ros2_humble/install/orbbec_camera/include/**",
-        "/home/yitian/ros2_humble/install/tf2_sensor_msgs/include/**",
         "/home/yitian/ros2_humble/install/tf2_kdl/include/**",
         "/home/yitian/ros2_humble/install/tf2_geometry_msgs/include/**",
         "/home/yitian/ros2_humble/install/tf2_eigen/include/**",

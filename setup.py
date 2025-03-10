@@ -24,6 +24,7 @@ setup(
             "giga_active = ros2_nodes.inference_node_giga_active:main",
             "vmf = ros2_nodes.inference_node_vmf:main",
             "vlm = ros2_nodes.inference_node_vlm:main",
+            "data = ros2_nodes.inference_node_data:main",
         ],
     },
 )

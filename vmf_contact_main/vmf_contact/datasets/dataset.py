@@ -35,7 +35,7 @@ class MGNDataset(Dataset):
         input_mean=(0.485, 0.456, 0.406),
         input_std=(0.229, 0.224, 0.225),
         pcd_with_rgb=False,
-        num_cameras=2,
+        num_cameras=1,
     ):
         """
         Args:
@@ -165,6 +165,7 @@ class MGNDataset(Dataset):
             pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
             pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
             pcd = pcd[pcd[:, 2] > -0.02]
+            pcd = denoise_point_cloud(pcd, method="statistical", nb_neighbors=20, std_ratio=2.0, radius=0.05, min_neighbors=16)
             pcd = over_or_re_sample(pcd, self.num_points // self.num_cameras)
 
             pcds.append(pcd[:, :3])
@@ -297,6 +298,35 @@ def custom_collate_fn(batch):
 
     return input_batch, gt_batch
 
+def denoise_point_cloud(points, method="statistical", nb_neighbors=30, std_ratio=2.0, radius=0.05, min_neighbors=16):
+    """
+    Denoises a point cloud given as a NumPy array.
+
+    Parameters:
+    - points (numpy.ndarray): Nx6 array representing point cloud coordinates with color.
+    - method (str): "statistical" for statistical outlier removal, "radius" for radius outlier removal.
+    - nb_neighbors (int): Number of neighbors for statistical outlier removal.
+    - std_ratio (float): Standard deviation ratio for statistical outlier removal.
+    - radius (float): Radius for radius outlier removal.
+    - min_neighbors (int): Minimum number of neighbors for radius outlier removal.
+
+    Returns:
+    - numpy.ndarray: Denoised point cloud.
+    """
+    # Convert NumPy array to Open3D point cloud
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points[:, :3].cpu().numpy())
+
+    # Apply selected denoising method
+    if method == "statistical":
+        pcd_clean, ind = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
+    elif method == "radius":
+        pcd_clean, ind = pcd.remove_radius_outlier(nb_points=min_neighbors, radius=radius)
+    else:
+        raise ValueError("Invalid method. Choose 'statistical' or 'radius'.")
+    points = points[ind]
+    points = torch.tensor(points, dtype=torch.float32, device=points.device)
+    return points
 
 def save_image_tensor(image_tensor, file_name, mode="rgb"):
     """

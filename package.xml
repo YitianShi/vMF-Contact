@@ -16,7 +16,6 @@
   <depend>tf2_ros</depend>
   <depend>tf2_py</depend>
   <depend>tf2_geometry_msgs</depend>
-  <depend>tf2_sensor_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

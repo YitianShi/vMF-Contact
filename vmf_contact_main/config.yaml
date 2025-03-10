@@ -1,6 +1,6 @@
 # Training settings
 devices: 4  # Distributed training device number
-debug: false  # Run in debug mode
+# debug: true  # Run in debug mode
 learning_rate: 1e-4  # Learning rate
 learning_rate_flow: 3e-4  # Learning rate for flow
 learning_rate_decay: 5e-4  # Learning rate decay
@@ -13,6 +13,7 @@ resume: true  # Resume from existing checkpoints
 use_best_model: false  # Use the best model
 camera_num: 2  # Number of cameras
 gradient_accumulation_steps: 1  # Gradient accumulation steps
+# eval: true  # Evaluate the model
 
 # Data module settings
 num_workers: 10  # Number of workers for data loading

@@ -1,197 +1,32 @@
-import numpy as np
-import open3d as o3d
-import torch
-from typing import Union, Optional
 
-#### Codes borrowed from pytorch3d ####
-
-
-from typing import Optional, Union, Tuple, List
-import math
 import torch
 import torch.nn.functional as F
-import random
+from typing import Optional, Tuple, Union
+import math
+import numpy as np 
+import open3d as o3d   
 
-Device = Union[str, torch.device]
 
-class GraspBuffer:
-    def __init__(self, device="cuda:0"):
-        self.buffer_dict = {
-            "pcds": [],
-            "baselines": [], 
-            "approaches": [], 
-            "cp": [], 
-            "cp2": [], 
-            "kappa": [], 
-            "graspness": []}
-        self.buffer_size = 0
-        
-    def create_vis(self):
-        self.vis = o3d.visualization.Visualizer()
-        self.vis.create_window()
+def group_and_sum(A, B, C):
+   # Example input tensors
+    # A: shape (N, K), B: indices to select rows from A, C: group IDs
+    selected_A = A[B]
 
-    def update(self, 
-               pcds, 
-               predictions,
-               shift=0.0,
-               resize=1.0, 
-               grasp_height_th=5e-3, 
-               grasp_width_th=0.1, 
-               graspness_th=0.3, 
-               pcd_from_prompt=None):
-        
-        if not isinstance(shift, torch.Tensor):
-            shift = torch.tensor(shift, device=pcds.device, dtype=torch.float32)
-        if not isinstance(resize, torch.Tensor):
-            resize = torch.tensor(resize, device=pcds.device, dtype=torch.float32)
-        
-        cp = predictions["contact_point"]
-        cp2 = predictions["contact_point"] + predictions["grasp_width"].unsqueeze(-1) * predictions["baseline"]
-        grasp_width = predictions["grasp_width"]
-        graspness = predictions["graspness"]
-        approach = predictions["approach"]
-        baseline = predictions["baseline"]
-        kappa = predictions["kappa"]
+    # Find unique group IDs and their corresponding indices
+    unique_C, inverse_indices, counts = torch.unique(C, return_inverse=True, return_counts=True)
 
-        filter = (graspness > graspness_th) & \
-                    (grasp_width < grasp_width_th) & \
-                    (cp[..., -1] > grasp_height_th) & \
-                    (cp2[..., -1] > grasp_height_th)
+    # Initialize tensor to store summed values
+    M = unique_C.shape[0]
+    K = A.shape[1] if len(A.shape) > 1 else 1
+    grouped_A = torch.zeros((M, K), dtype=A.dtype, device=A.device)
 
-        if pcd_from_prompt is not None:
-            pcd_from_prompt = torch.tensor(pcd_from_prompt, device=self.device, dtype=torch.float32)
-            # calculate the distance between the contact points and the prompt points
-            dist = torch.cdist(cp, pcd_from_prompt)
-            # dist2 = torch.cdist(cp2, pcd_from_prompt)
-            filter = filter & (dist.min(1).values < 0.01)
-        
-        pcds = pcds * resize + shift
+    # Sum elements based on group ID using scatter_add_
+    grouped_A.scatter_add_(0, inverse_indices.unsqueeze(1).expand(-1, K), selected_A)
 
-        if filter.sum() == 0:
-            print("No valid grasp")
-            return False
-
-        # print(f"Number of grasps: {filter.sum()}")
-        else:
-            cp = cp[filter] * resize + shift
-            cp2 = cp2[filter] * resize + shift
-            mid_pt = (cp2 + cp) / 2
-            
-            baseline = predictions["baseline"][filter]
-            kappa = predictions["kappa"][filter]
-            approach = approach[filter]
-            graspness = graspness[filter]
-
-            self.buffer_dict["pcds"].append(pcds)  
-            self.buffer_dict["baselines"].append(baseline)
-            self.buffer_dict["approaches"].append(approach)
-            self.buffer_dict["cp"].append(cp)
-            self.buffer_dict["cp2"].append(cp2)
-            self.buffer_dict["kappa"].append(kappa)
-            self.buffer_dict["graspness"].append(graspness)
-
-            self.buffer_size += 1
-            return True
-  
-    def get_pcds_all(self):
-        return torch.cat(self.buffer_dict["pcds"], dim=0)
+    counts = counts.unsqueeze(-1)
     
-    def get_grasp_all(self):
-        baselines = torch.cat(self.buffer_dict["baselines"], dim=0)
-        approaches = torch.cat(self.buffer_dict["approaches"], dim=0)
-        cp = torch.cat(self.buffer_dict["cp"], dim=0)
-        cp2 = torch.cat(self.buffer_dict["cp2"], dim=0)
-        kappa = torch.cat(self.buffer_dict["kappa"], dim=0)
-        graspness = torch.cat(self.buffer_dict["graspness"], dim=0)
-        return baselines, approaches, cp, cp2, kappa, graspness
-    
-    def get_pose_all(self, convention="xzy"):
-        baselines, approaches, cp, cp2, kappa, graspness = self.get_grasp_all()
-        poses = rotation_from_contact(baseline=baselines, 
-                                      approach=approaches, 
-                                      translation=(cp+cp2)/2, 
-                                      convention=convention)
-        return poses, kappa, graspness
-    
-    def get_pcds_curr(self):
-        return self.buffer_dict["pcds"][-1]
-    
-    def get_grasp_curr(self):
-        baseline = self.buffer_dict["baselines"][-1]
-        approach = self.buffer_dict["approaches"][-1]
-        cp = self.buffer_dict["cp"][-1]
-        cp2 = self.buffer_dict["cp2"][-1]
-        kappa = self.buffer_dict["kappa"][-1]
-        graspness = self.buffer_dict["graspness"][-1]
-        return baseline, approach, cp, cp2, kappa, graspness
-    
-    def get_pose_curr(self, convention="xzy"):
-        baseline, approach, cp, cp2, kappa, graspness = self.get_grasp_curr()
-        poses = rotation_from_contact(baseline=baseline, 
-                                      approach=approach, 
-                                      translation=(cp+cp2)/2,
-                                      convention=convention)
-        return poses, kappa, graspness
-    
-    def set_view(self, center):
-        """Set a specific viewpoint."""
-        ctr = self.vis.get_view_control()
+    return grouped_A, unique_C, counts
 
-        # Set camera parameters
-        ctr.set_zoom(1)  # Zoom factor
-        ctr.set_lookat(center)  # Look at center
-        ctr.set_front([-1, 0, 1])  # View direction
-        ctr.set_up([0, 0, 1])  # Up vector
-    
-    def vis_grasps(self, all = False):
-
-        if len(self.buffer_dict["pcds"]) == 0:
-            print("Buffer is empty, no grasp to visualize")
-            return
-
-        pcd = self.get_pcds_curr()
-        baseline, approach, cp, cp2, kappa, graspness = self.get_grasp_curr()
-        vis_list = vis_grasps(
-                    samples=pcd,
-                    cp=cp,
-                    cp2=cp2,
-                    kappa=kappa,
-                    approach=approach,
-                    score = graspness,
-                )
-            
-        if not hasattr(self, "vis"):
-            self.create_vis()
-
-        if not all:
-            self.vis.clear_geometries()
-
-        for geom in vis_list:
-            self.vis.add_geometry(geom)
-        # Update the visualizer
-        center = pcd.mean(0).cpu().numpy()
-        self.set_view(center = center)
-        self.vis.poll_events()
-        self.vis.update_renderer()            
-
-    def get_pose_curr_best(self, convention="xzy", sort_by="kappa", sample_num=1):
-
-        if len(self.buffer_dict["pcds"]) == 0:
-            print("Buffer is empty, no grasp to choose")
-            return None
-        
-        poses, kappa, graspness = self.get_pose_curr(convention)
-        
-        score = kappa if sort_by == "kappa" else graspness
-        
-        #sort poses by criterion
-        sample_num = min(sample_num, poses.size(0))
-        poses_candidates = poses[torch.argsort(score, descending=True)][:sample_num]
-
-        #randomly sample 1 poses
-        pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
-        return pose_chosen
-    
 
 def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
     """
@@ -1297,12 +1132,16 @@ def contact_from_quaternion(quaternions, convention="xzy"):
 
 def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
                 color=[0.7, 0.1, 0.1], graspline_width=5e-4, finger_length=0.025,
-                arm_length=0.02, sphere_radius=2e-3):
+                arm_length=0.02, sphere_radius=5e-3):
     
     vis_list = []
-    color_max = np.array([1, 1, 1])  # Light red (RGB)
-    color_min = np.array([0, 0, 0])
+    color_max = np.array([0, 0, 1])
+    color_min = np.array([1, 0, 0])
     cp_half = (cp + cp2) / 2
+
+    # normalize the score
+    if score is not None:
+        score = (score - score.min()) / (score.max() - score.min() + 1e-6)
 
     if cp is not None and cp2 is not None:
         for i, (q, a, app, half_q, half_a) in enumerate(zip(cp, cp2, approach, 
@@ -1331,7 +1170,8 @@ def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
 
             # Draw spheres if kappa is provided
             if kappa is not None:
-                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=sphere_radius * kappa[i] / 10)
+                # clip kappa in 0, 500
+                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=sphere_radius * kappa[i])
                 sphere.paint_uniform_color(color)
                 sphere.translate(q - app * finger_length)
                 vis_list.append(sphere)

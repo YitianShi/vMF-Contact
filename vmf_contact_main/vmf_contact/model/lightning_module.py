@@ -11,9 +11,7 @@ from openpoints.cpp.chamfer_dist import ChamferDistanceL1
 from openpoints.optim import build_optimizer_from_cfg
 from openpoints.scheduler import build_scheduler_from_cfg
 from .utils import *
-import threading
-import random
-import os
+from .grasp_buffer import GraspBuffer
 
 Batch = Tuple[torch.Tensor, torch.Tensor]
 loss_terms_orientation = {
@@ -279,11 +277,15 @@ class vmfContactLightningModule(pl.LightningModule):
         self._compute_orientation_loss(pred, gt_batch, pcd=pcd[..., :3], normals=normals)
         self._compute_reconstruction_loss(pred, input_batch["pcd_gt"])
 
-        for k,v in self.losses.items():
-            # check inf in loss
-            if torch.isinf(v).any():
-                print(f"Loss {k} is inf")
-                self._compute_orientation_loss(pred, gt_batch, pcd=pcd[..., :3], normals=normals)
+        if self.debug:
+            valid_grasp = self.grasp_buffer.push_buffer(pcd, 
+                                                        pred,
+                                                        graspness_th=0.3,
+                                                        uncertainty_estimator=self.uncertainty_estimator,
+                                                        integrate = False)  
+            if valid_grasp:
+                with torch.no_grad():
+                    self.grasp_buffer.vis_grasps(interactive_vis=True, amplify_kappa=True)
 
         if self.prob_baseline == "post":
            self._flow_loss(pred)
@@ -460,48 +462,6 @@ class vmfContactLightningModule(pl.LightningModule):
                 self.ausc.update(graspness_bt[i], graspness_gt_all, "graspness")
 
             # Visualize the predicted contact points and the baseline vector
-            if self.debug:  
-            # if self.losses["baseline"] > 1.8:   
-                filter = torch.randint(0, pred["contact_point"][i][pair_ind[1]].shape[0], (100,), device=pred["contact_point"][i][pair_ind[1]].device)
-                # group_point_pos = pred["group_point_pos"][-1][i]
-                cp = pred["contact_point"][i][pair_ind[1]]
-                
-                
-                #pt = o3d.geometry.PointCloud()
-                #pt.points = o3d.utility.Vector3dVector(cp[filter].detach().cpu().numpy())
-                #pt.normals = o3d.utility.Vector3dVector(normal[filter].cpu().numpy())
-                #pt_2 = pcd[i]
-                #pt_2 = o3d.geometry.PointCloud()
-                #pt_2.points = o3d.utility.Vector3dVector(pcd[i].cpu().numpy())
-                #o3d.visualization.draw_geometries([pt, pt_2], point_show_normal=True)
-
-                # cp_vis1 = o3d.geometry.PointCloud()
-                # cp_vis1.points = o3d.utility.Vector3dVector(cp.cpu().numpy())
-                # cp_vis1.normals = o3d.utility.Vector3dVector(baseline.cpu().numpy())
-                # cp_vis2 = o3d.geometry.PointCloud()
-                # cp_vis2.points = o3d.utility.Vector3dVector(cp.cpu().numpy())
-                # cp_vis2.normals = o3d.utility.Vector3dVector(-normal.cpu().numpy())
-                # o3d.visualization.draw_geometries([cp_vis1, cp_vis2], point_show_normal=True)
-
-                cp_gt = pred["anchor"][i]
-                cp2 = cp + width_gt.unsqueeze(-1) * baseline
-                cp2_gt = cp_gt + width_gt.unsqueeze(-1) * baseline_gt
-
-                filter = torch.randint(0, cp.shape[0], (100,), device=cp.device)
-                vis_list = vis_grasps(
-                    samples= pcd[i],
-                    groups=None,
-                    cp_gt=cp_gt,
-                    cp2_gt=cp2_gt,
-                    cp=cp,
-                    cp2=cp2,
-                    kappa=kappa,
-                    approach_gt=approach_gt,
-                    approach=approach,
-                    #bin_vectors=bin_vectors * bin_score.sigmoid().unsqueeze(-1).detach(),
-                    #bin_vectors_gt=bin_vectors * bin_score_gt.unsqueeze(-1).detach(),
-                )
-                o3d.visualization.draw_geometries(vis_list)
 
         for k, v in loss_terms_orientation.items():
             self.losses[k] *= v / self.batch_size
@@ -536,72 +496,54 @@ class vmfContactLightningModule(pl.LightningModule):
     def inference(self, 
         pcd, 
         pcd_num = 20000,
-        shift=0.0,
+        pcd_shift=0.0,
         resize=1.0, 
         sample_num=1,
-        grasp_height_th=5e-3,
-        grasp_width_th=0.1,
-        graspness_th=0.3,
+        graspness_th=0.0,
+        grasp_height_th=-0.2,
         pcd_from_prompt=None,
         convention="xzy",
+        vis=False,
+        interactive_vis=False,
+        fused_pose=True
         ):
+        if len(pcd) == 0:
+            # print("No valid point cloud, skipping inference")
+            return None
+        
         pcd = torch.tensor(pcd, device=self.device, dtype=torch.float32)
         assert pcd.size(-1) == 3
         if pcd.dim() == 3:
             pcd = pcd.view(-1, 3)
-        predictions = {}
 
         pcd = over_or_re_sample(pcd, pcd_num)
 
         with torch.no_grad():
             self.uncertainty_estimator.flow.eval()
             out = self.model(pcd)
-            predictions["contact_point"] = out["contact_point"].squeeze(0)
-
-            baseline_params = out["baseline"]
-            if self.prob_baseline == "post":
-                feature = out["cp_features"].squeeze(0)
-                baseline_post = self.uncertainty_estimator.posterior_update(feature, baseline_params)
-
-                baseline_vec = baseline_post.mu_post
-                kappa = baseline_post.kappa_post.squeeze()
-            
-            else:
-                baseline_vec = baseline_params[..., :3]
-                kappa = baseline_params[..., -1].exp().squeeze()
-
-            baseline_vec = torch.nn.functional.normalize(baseline_vec, dim=-1)
-                
-            predictions["baseline"] = baseline_vec.squeeze(0)
-            predictions["kappa"] = kappa
-
-            bin_score = out["bin_score"].squeeze(0)
-            bin_vectors = rotate_circle_to_batch_of_vectors(
-                        bin_score.shape[-1], baseline_vec.squeeze(0)
-                    )
-            approach = torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
-            predictions["approach"] = approach
-
-            predictions["grasp_width"] = out["grasp_width"].squeeze(0)
-            predictions["graspness"] = out["graspness"].squeeze(0).sigmoid()
-
-
-        # update the grasp buffer
-        valid_grasp = self.grasp_buffer.update(pcd, 
-                                 predictions,
-                                 shift,
-                                 resize,
-                                 # threshold for filtering out invalid grasps 
-                                 grasp_height_th, 
-                                 grasp_width_th, 
-                                 graspness_th, 
-                                 pcd_from_prompt)
-        if not valid_grasp:
-            print("No valid grasp")
-            return None
-        self.grasp_buffer.vis_grasps(all=True)
-        pose_chosen = self.grasp_buffer.get_pose_curr_best(convention=convention, sample_num=sample_num)
         
-        print("Chosen pose", pose_chosen)
+        valid_grasp = self.grasp_buffer.push_buffer(pcd,
+                                                    out, 
+                                                    pcd_shift=pcd_shift,
+                                                    resize=resize,
+                                                    graspness_th=graspness_th,
+                                                    grasp_height_th=grasp_height_th,
+                                                    pcd_from_prompt=pcd_from_prompt,
+                                                    uncertainty_estimator=self.uncertainty_estimator,
+                                                    integrate = True
+                                                    )
+        
+        if not valid_grasp:
+            # print("No valid grasp")
+            return None
+        if vis:
+            self.grasp_buffer.vis_grasps(pcd_shift = pcd_shift, interactive_vis=interactive_vis, fused_pose=fused_pose)
+        
+        if fused_pose:
+            pose_chosen = self.grasp_buffer.get_pose_fused_best(convention=convention, sample_num=sample_num)
+        else:
+            pose_chosen = self.grasp_buffer.get_pose_curr_best(convention=convention, sample_num=sample_num)
+        
+        # print("Chosen pose", pose_chosen)
         return pose_chosen.cpu().numpy()
         

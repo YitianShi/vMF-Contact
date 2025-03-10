@@ -7,3 +7,4 @@ __pycache__
 logs_slurm/*
 diff
 wandb
+ros2_nodes

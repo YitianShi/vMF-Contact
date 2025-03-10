@@ -16,7 +16,6 @@ from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import StaticTransformBroadcaster
-from tf2_sensor_msgs.tf2_sensor_msgs import transform_points
 from cv_bridge import CvBridge
 import cv2
 import os, torch
@@ -29,8 +28,9 @@ import tf2_geometry_msgs
 from .utils_node import *
 from lang_sam import LangSAM
 from PIL import Image
-from vmf_contact_main.camera_utils import *
-from vmf_contact_main.active_grasp.spatial import *
+from ros2_nodes.utils_camera import *
+from active_grasp.spatial import *
+from active_grasp.vlm_utils.img_bbox_utils import *
 import signal
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
 
@@ -50,6 +50,16 @@ MOVING_TO_PREGRASP_RETURN = "moving_to_pregrasp2"
 MOVING_TO_CAMERA_READY = "moving_to_camera_ready"
 FAILED = "failed"
 MOVING = "moving"
+gaze_point_robot = [-0.73, 0.1, 0.1]
+
+SENSOR_FRAME = "camera_color_optical_frame"
+
+
+obj_list = [
+   "red cup", "orange cordless drill", "red cheezit box", "purple plum", 
+   "yellow cup", "yellow tennisball", "red apple", "white baseball",
+   "yellow bottle", "white wooden box"
+]
 
 class AIRNode(Node):
 
@@ -142,16 +152,21 @@ class AIRNode(Node):
 
         self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.794, 1.381, 0.995, 0.009, 0.005, 0.100], "world") # long finger
         # self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.572, 1.492, 0.995, 0.009, 0.005, 0.100], "world") # small finger
-        self.drop_off_pose: PoseStamped = list_to_pose_stamped([0.15, -0.75, 1.3, 1.0, 0.0, 0.0, 0.0], "world")
+        self.drop_off_pose: PoseStamped = list_to_pose_stamped([0.15, -0.75, 1.4, 1.0, 0.0, 0.0, 0.0], "world")
 
-        self.langsam_model = LangSAM() if use_langsam else None
+        self.langsam_model = LangSAM(sam_type="sam2.1_hiera_large") if use_langsam and len(obj_list) else None
+        self.input_ready = False
 
     
     def to_camera_ready_pose(self):
         self.change_state_to_cartesian_ctl()
         self.set_eelink("tcp")
+        self.movement_finished_flag.clear()
         self.send_goal(self.camera_ready_pose)
         self.open_gripper()
+
+        while not self.movement_finished_flag.is_set():
+            continue
 
 
     def current_pose_callback(self, msg):
@@ -213,8 +228,15 @@ class AIRNode(Node):
                 self.get_logger().info(f"Camera info received: {self.intrinsics}")
                 break
             except:
-                self.get_logger().info("No camera info received yet.")
+                self.get_logger().info("No camera info received yet, trying again...")
                 time.sleep(1)
+        
+ 
+        pcd_msg_camera = self.last_point_cloud_msg
+        t_robot_2_camera = self.tf_buffer.lookup_transform(
+            "base_link", pcd_msg_camera.header.frame_id, rclpy.time.Time()
+        )
+        
 
     def listener_callback_pcd(self, msg: sensor_msgs.PointCloud2):
         """Callback function for the subscriber of the point cloud topic."""
@@ -241,11 +263,65 @@ class AIRNode(Node):
         self.image_height = float(msg.height)
         if self.shutdown:
             raise SystemExit
+        
+    def process_point_cloud_and_rgbd_node(self):
+        while True:
+            # TODO: add rgb image processing
+            if self.last_point_cloud_msg is None:
+                self.get_logger().info("No point cloud message received yet.")
+                return
 
-    def process_point_cloud_and_rgbd(self, save_data=False):
+            if self.last_image_msg is None:
+                self.get_logger().info("No image message received yet.")
+                return
+        
+            if self.last_depth_msg is None:
+                self.get_logger().info("No depth message received yet.")
+                return
+
+            # transform the point cloud to base_link frame
+            camera= CameraInfo(
+                width=self.image_width, height=self.image_height, fx=self.camera_matrix[0, 0], fy=self.camera_matrix[1, 1],
+                cx=self.camera_matrix[0, 2], cy=self.camera_matrix[1, 2], scale=1000.0
+            )
+
+            last_depth_msg = self.last_depth_msg
+            # stamp = last_depth_msg.header.stamp
+
+            pcd_from_depth = create_point_cloud_from_depth_image(last_depth_msg, camera, organized=True).reshape(-1, 3)
+            
+            # Look up for the transformation between base_link and the frame_id of the point cloud
+            t_robot_2_camera = self.tf_buffer.lookup_transform(
+                    "base_link", SENSOR_FRAME, rclpy.time.Time()
+                )
+            
+            self.input_ready = False
+            self.pcd = transform_points(pcd_from_depth, t_robot_2_camera.transform) 
+            self.cam_pose_robot = transform_to_pose(t_robot_2_camera.transform)
+            cam_pos = [self.cam_pose_robot.position.x - gaze_point_robot[0], 
+                    self.cam_pose_robot.position.y - gaze_point_robot[1], 
+                    self.cam_pose_robot.position.z - gaze_point_robot[2]]
+            self.azimuth, self.elevation = pos_to_azi_elev(cam_pos)
+            self.depth = last_depth_msg.astype(np.float32) / 1000.0
+            self.img = self.last_image_msg
+            self.input_ready = True
+
+            # print("depth_msg_stamp: ", stamp)
+            # print("transform_msg_stamp: ", t_robot_2_camera.header.stamp)
+    
+    def record_videos(self):
+        # start recording
+        record_orbbec_video(self, "color")
+        record_orbbec_video(self, "depth")
+        self.realsense_thread = threading.Thread(target=record_realsense_video)
+        self.realsense_thread.start()
+
+    def process_point_cloud_and_rgbd(self, save_data=False, pcd_only=False):
         # TODO: add rgb image processing
         if self.last_point_cloud_msg is None:
             self.get_logger().info("No point cloud message received yet.")
+            if pcd_only:
+                return None, False
             return [None] * 4, False
 
         if self.last_image_msg is None:
@@ -255,14 +331,9 @@ class AIRNode(Node):
         if self.last_depth_msg is None:
             self.get_logger().info("No depth message received yet.")
             return [None] * 4, False
-
-        if self.last_point_cloud_msg is None:
-            self.get_logger().info("No camera info message received yet.")
-            return [None] * 4, False
         
         # Get the latest point cloud and image messages
         pcd_msg_camera = self.last_point_cloud_msg
-        img = self.last_image_msg
 
         # transform the point cloud to base_link frame
         camera= CameraInfo(
@@ -275,7 +346,12 @@ class AIRNode(Node):
         t_robot_2_camera = self.tf_buffer.lookup_transform(
                 "base_link", pcd_msg_camera.header.frame_id, rclpy.time.Time()
             )
-        pcd_numpy_base_link = transform_points(pcd_from_depth, t_robot_2_camera.transform)  
+        print("depth_msg_stamp: ", pcd_msg_camera.header.stamp)
+        print("transform_msg_stamp: ", t_robot_2_camera.header.stamp)
+        pcd_numpy_base_link = transform_points(pcd_from_depth, t_robot_2_camera.transform) 
+
+        if pcd_only:
+            return pcd_numpy_base_link, True 
 
         # remove previous masks
         for file in os.listdir(current_file_folder):
@@ -285,79 +361,18 @@ class AIRNode(Node):
         # transformation to pose
         cam_pose_robot = transform_to_pose(t_robot_2_camera.transform)
 
-        # remove previous masks
-        for file in os.listdir(current_file_folder):
-            if file.endswith(".jpg"):
-                os.remove(os.path.join(current_file_folder, file))
-        
-        if self.langsam_model is not None:
-            time_curr = time.time()
-            prompt_input = ""
-            while prompt_input == "":
-                prompt_input = input("Please enter what you would like to grasp: ")
-            prompt_input = prompt_input.split(".")
-            print("Prompt: ", prompt_input)
-        
-            self.masked_pcd_dict = {}
-            # predict masks with lang_sam
-            results = self.langsam_model.predict([Image.fromarray(img)], [". ".join(prompt_input)])
-
-            print(f"Time taken for inference: {time.time() - time_curr}")
-
-            print(f"save images to {current_file_folder}")
-            cv2.imwrite(f"{current_file_folder}/image.jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-            
-            # check if there are labels detected
-            labels = results[0]["labels"]
-            if len(labels) == 0:
-                print("No labels detected.")
-                return pcd_numpy_base_link, False
-            # check duplicates in labels, if there are duplicates, mark them with a number
-            labels = mark_duplicates(labels)
-            print("Results: ", labels)
-            print("Scores: ", results[0]["scores"])
-
-            # mask point cloud and image
-            for i, text in enumerate(labels):
-                mask = results[0]["masks"][i].astype(np.uint8)[:, :, None]
-                # mask image and point cloud
-                pcd_masked = pcd_numpy_base_link[mask.reshape(-1) == 1]
-                self.masked_pcd_dict[text] = pcd_masked
-                
-                # save masked image
-                cv2.imwrite(f"{current_file_folder}/{text}.jpg", img[..., ::-1] * mask)
-                
-                # # visualize the masked point cloud
-                # pcd_masked_color = img.reshape(-1, 3)[mask.reshape(-1) == 1]
-                # pcd = o3d.geometry.PointCloud()
-                # pcd.points = o3d.utility.Vector3dVector(pcd_masked)
-                # pcd.colors = o3d.utility.Vector3dVector(pcd_masked_color[:, ::-1] / 255)
-                # o3d.visualization.draw_geometries([pcd], window_name=text)
-
-        # save the image, depth, point cloud and camera pose as a dictionary of numpy arrays
-        # viszualize the rgbd data
-        if save_data:
-            name = f"/home/yitian/data_active_grasp/{cam_pose_robot.position.x}_{cam_pose_robot.position.y}_{cam_pose_robot.position.z}"
-            cv2.imwrite(f"image.jpg", img[..., ::-1])
-            dict_rgbd = {
-                "image": img,
-                "depth": self.last_depth_msg,
-                "pcd": pcd_numpy_base_link,
-                "cam_pose": [cam_pose_robot.position.x, 
-                            cam_pose_robot.position.y, 
-                            cam_pose_robot.position.z,
-                            cam_pose_robot.orientation.x, 
-                            cam_pose_robot.orientation.y, 
-                            cam_pose_robot.orientation.z, 
-                            cam_pose_robot.orientation.w]
-            }
-            np.savez(f"{name}.npz", **dict_rgbd)
+        pos = [cam_pose_robot.position.x - gaze_point_robot[0], 
+                   cam_pose_robot.position.y - gaze_point_robot[1], 
+                   cam_pose_robot.position.z - gaze_point_robot[2]]
+        azimuth, elevation = pos_to_azi_elev(pos)
 
         return (pcd_numpy_base_link, 
                 self.last_image_msg, 
                 self.last_depth_msg.astype(np.float32) / 1000.0, 
-                cam_pose_robot), True         
-    
+                cam_pose_robot, 
+                azimuth,
+                elevation), True
+       
     def handle_user_input(self):
         raise NotImplementedError
 
@@ -455,12 +470,13 @@ class AIRNode(Node):
         return True
 
 
-    def execute_grasp(self, grasp_pose, frame = "base_link"):
+    def execute_grasp(self, grasp_pose:Pose, frame = "base_link"):
 
         self.change_state_to_cartesian_ctl()
         self.get_logger().info("Sending goal now...")
 
         # transform posestamped from base_link to world using t_world_2_base_link
+        grasp_pose = pose_stamped_from_pose(grasp_pose, "base_link")
         t_world_2_base_link = self.tf_buffer.lookup_transform("world", frame, rclpy.time.Time())
         grasp_pose.pose = tf2_geometry_msgs.do_transform_pose(grasp_pose.pose, t_world_2_base_link)
         grasp_pose.header.frame_id = "world"
@@ -596,7 +612,7 @@ class AIRNode(Node):
                 elif state_machine_state == FAILED:
                     self.get_logger().info("State machine failed")
                     return False
-            return True
+            return input("Is the grasp successful? (y/n): ").lower() == "y"
 
     def get_input(self):
         try:
@@ -616,24 +632,27 @@ class AIRNode(Node):
            
     def create_pregrasp_pose(self, grasp_pose: PoseStamped) -> PoseStamped:
         # Create a pregrasp pose by transforming the grasp pose in the z direction
-        pregrasp_pose = self.transform_pose_z(grasp_pose, z_offset=-0.1)
+        pregrasp_pose = PoseStamped()
+        pregrasp_pose.header = grasp_pose.header
+        pregrasp_pose.header.frame_id = "world"
+        pregrasp_pose.pose = self.transform_pose_z(grasp_pose.pose, z_offset=-0.1)
+        # print("Pregrasp pose: ", pregrasp_pose)
         return pregrasp_pose
     
-    def transform_pose_z(self, pose_stamped: PoseStamped, z_offset: float) -> PoseStamped:
+    def transform_pose_z(self, pose: Pose, z_offset: float) -> PoseStamped:
         # Copy the original pose
-        new_pose_stamped = PoseStamped()
-        new_pose_stamped.header = pose_stamped.header
-        new_pose_stamped.pose = pose_stamped.pose
+        new_pose = copy.deepcopy(pose)
 
         # Extract the current pose
-        current_position = pose_stamped.pose.position
-        current_orientation = pose_stamped.pose.orientation
+        current_position = pose.position
+        current_orientation = pose.orientation
 
         # Convert quaternion to rotation matrix
         rotation_matrix = quaternion_matrix([current_orientation.x, 
                                              current_orientation.y, 
                                              current_orientation.z, 
                                              current_orientation.w])
+        print("Rotation matrix: ", rotation_matrix)
 
         # Translation in the local z direction (12 cm = 0.12 meters)
         translation = [0.0, 0.0, z_offset, 1.0]
@@ -642,11 +661,11 @@ class AIRNode(Node):
         transformed_translation = rotation_matrix.dot(translation)
 
         # Update the position with the transformed translation
-        new_pose_stamped.pose.position.x = current_position.x + transformed_translation[0]
-        new_pose_stamped.pose.position.y = current_position.y + transformed_translation[1]
-        new_pose_stamped.pose.position.z = current_position.z + transformed_translation[2]  
+        new_pose.position.x = current_position.x + transformed_translation[0]
+        new_pose.position.y = current_position.y + transformed_translation[1]
+        new_pose.position.z = current_position.z + transformed_translation[2]  
 
-        return new_pose_stamped
+        return new_pose
     
     def publish_new_frame(self, name, pose: PoseStamped):
         t = TransformStamped()
@@ -680,20 +699,20 @@ class AIRNode(Node):
         self._send_goal_future.add_done_callback(self.robot_goal_response_callback)
 
     def send_goal_traj(self, goal_path):
-            goal_msg = MoveCartesianPath.Goal()
-            goal_msg.poses = goal_path
+        goal_msg = MoveCartesianPath.Goal()
+        goal_msg.poses = goal_path
 
-            self.get_logger().info("Waiting for action server...")
+        self.get_logger().info("Waiting for action server...")
 
-            self._robot_action_client_traj.wait_for_server()
+        self._robot_action_client_traj.wait_for_server()
 
-            self.get_logger().info("Sending goal request...")
+        self.get_logger().info("Sending goal request...")
 
-            self._send_goal_future = self._robot_action_client_traj.send_goal_async(
-                goal_msg, feedback_callback=self.robot_feedback_callback 
-            )
+        self._send_goal_future = self._robot_action_client_traj.send_goal_async(
+            goal_msg, feedback_callback=self.robot_feedback_callback 
+        )
 
-            self._send_goal_future.add_done_callback(self.robot_goal_response_callback)
+        self._send_goal_future.add_done_callback(self.robot_goal_response_callback)
 
 
     def set_eelink(self, eelink_name: str):
@@ -989,10 +1008,8 @@ class AIRNode(Node):
     def create_trajectory(self, data):
             path = []
             for p in data:
-                rosp = PoseStamped()
                 cam_pose_to_robot = series_to_pose(p)
                 tcp_pose_to_world, _ = self.camera_robot_pose_to_tcp_world_pose(cam_pose_to_robot)
-                rosp.header.frame_id = "world"
                 path.append(tcp_pose_to_world)
             return path
 

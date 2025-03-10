@@ -1,8 +1,17 @@
 import numpy as np
 from geometry_msgs.msg import Pose, PoseStamped, Transform, TransformStamped
 from tf_transformations import quaternion_from_matrix, quaternion_matrix, translation_from_matrix
-from vmf_contact_main.active_grasp.spatial import SpatialTransform
+from active_grasp.spatial import SpatialTransform
 from scipy.spatial.transform import Rotation as R
+import numpy as np
+import torch
+import cv2
+import os
+from sensor_msgs.msg import Image
+import datetime
+import pyrealsense2 as rs
+
+HOME = str(os.path.expanduser('~'))
 
 # Function to mark duplicates with a number
 def mark_duplicates(labels):
@@ -199,43 +208,21 @@ def azi_to_pos(azimuth, elevation, distance):
     z = distance * np.sin(elevation)
     return [x, y, z]
 
-    
-def look_at_transformation(gaze_point, robot_position):
-    """
-    Compute a transformation matrix that aligns the robot's orientation to look at a gaze point.
-    
-    :param gaze_point: (x, y, z) coordinates of the gaze target in the world frame
-    :param robot_position: (x, y, z) coordinates of the robot's reference point (e.g., end-effector or camera)
-    :return: (position, quaternion) representing the pose
-    """
-    gaze_point = np.array(gaze_point)
-    robot_position = np.array(robot_position)
+def pos_to_azi_elev(position, distance=0.47):
+    # Convert 3D position to azimuth and elevation
+    # position: list or array containing [x, y, z] coordinates
+    # distance: the distance from the camera to the object
+    # return: azimuth in range [-90, 90] and elevation in range [0, 180] in degrees
 
-    # Compute direction vector from robot to gaze point
-    direction = gaze_point - robot_position
-    direction /= np.linalg.norm(direction)  # Normalize
+    x, y, z = position
 
-    # Define a reference up vector (assuming Z-up world frame)
-    left_vector = np.array([0, -1, 0])
+    # Compute the azimuth angle in the range [-180, 180]
+    azimuth = np.rad2deg(np.arctan2(y, x))
 
-    # Compute right vector (cross product of up and direction)
-    up_vector = np.cross(left_vector, direction)
-    up_vector /= np.linalg.norm(up_vector)
+    # Compute the elevation angle (range [0, 90])
+    elevation = np.rad2deg(np.arcsin(z / distance))  # arccos ensures output in [0, 180]
 
-    # Compute new up vector (orthogonal to both direction and right)
-    right_vector = np.cross(up_vector, direction)
-
-    # Construct rotation matrix
-    rotation_matrix = np.eye(4)
-    rotation_matrix[:3, 0] = right_vector
-    rotation_matrix[:3, 1] = up_vector
-    rotation_matrix[:3, 2] = direction
-    rotation_matrix[:3, 3] = robot_position  # Set translation
-
-    # Convert rotation matrix to quaternion
-    quaternion = quaternion_from_matrix(rotation_matrix)
-
-    return list(quaternion)
+    return azimuth, elevation
 
 def pose_to_transform(pose: Pose, header = None) -> TransformStamped:
     tf = TransformStamped()
@@ -289,12 +276,199 @@ def pose_stamped_from_pose(pose_in: Pose, frame_id: str) -> PoseStamped:
     pose_stamped.pose = pose
     return pose_stamped
 
-def azi_to_pos(azimuth, elevation, distance):
-    azimuth = np.deg2rad(azimuth)
-    elevation = np.deg2rad(elevation)
-    x = distance * np.cos(azimuth) * np.cos(elevation)
-    y = distance * np.sin(azimuth) * np.cos(elevation)
-    z = distance * np.sin(elevation)
-    return [x, y, z]
+def transform_points(
+        point_cloud: np.ndarray,
+        transform: Transform) -> np.ndarray:
+    """
+    Transform a bulk of points from an numpy array using a provided `Transform`.
+
+    :param point_cloud: nx3 Array of points where n is the number of points
+    :param transform: TF2 transform used for the transformation
+    :returns: Array with the same shape as the input array, but with the transformation applied
+    """
+    # Build affine transformation
+    transform_translation = np.array([
+        transform.translation.x,
+        transform.translation.y,
+        transform.translation.z
+    ])
+    transform_rotation_matrix = _get_mat_from_quat(
+        np.array([
+            transform.rotation.w,
+            transform.rotation.x,
+            transform.rotation.y,
+            transform.rotation.z
+        ]))
+
+    # "Batched" matmul meaning a matmul for each point
+    # First we offset all points by the translation part
+    # followed by a rotation using the rotation matrix
+    return np.einsum(
+        'ij, pj -> pi',
+        transform_rotation_matrix,
+        point_cloud) + transform_translation
+
+def _get_mat_from_quat(quaternion: np.ndarray) -> np.ndarray:
+    """
+    Convert a quaternion to a rotation matrix.
+
+    This method is currently needed because transforms3d is not released as a `.dep` and
+    would require user interaction to set up.
+
+    For reference see: https://github.com/matthew-brett/transforms3d/blob/
+    f185e866ecccb66c545559bc9f2e19cb5025e0ab/transforms3d/quaternions.py#L101
+
+    :param quaternion: A numpy array containing the w, x, y, and z components of the quaternion
+    :returns: An array containing an X, Y, and Z translation component
+    """
+    Nq = np.sum(np.square(quaternion))
+    if Nq < np.finfo(np.float64).eps:
+        return np.eye(3)
+
+    XYZ = quaternion[1:] * 2.0 / Nq
+    wXYZ = XYZ * quaternion[0]
+    xXYZ = XYZ * quaternion[1]
+    yYZ = XYZ[1:] * quaternion[2]
+    zZ = XYZ[2] * quaternion[3]
+
+    return np.array(
+        [[1.0-(yYZ[0]+zZ), xXYZ[1]-wXYZ[2], xXYZ[2]+wXYZ[1]],
+         [xXYZ[1]+wXYZ[2], 1.0-(xXYZ[0]+zZ), yYZ[1]-wXYZ[0]],
+         [xXYZ[2]-wXYZ[1], yYZ[1]+wXYZ[0], 1.0-(xXYZ[0]+yYZ[0])]])
+
+def color_image_callback(msg, video_writer_info):
+    try:
+        # Convert ROS2 Image message to OpenCV format
+        frame = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, -1))
+        if frame.shape[2] == 3:  # If it's a color image
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        frame_resized = cv2.resize(frame, (640, 480))
+        # Initialize VideoWriter if not already initialized
+        if video_writer_info["writer"] is None:
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')  # Codec for MP4
+            video_writer_info["writer"] = cv2.VideoWriter(
+                video_writer_info["output_file"], fourcc, video_writer_info["fps"], (640, 480)
+            )
+
+        # Write frame to video
+        video_writer_info["writer"].write(frame_resized)
+
+    except Exception as e:
+        print(f"Error processing frame: {e}")
+
+def depth_image_callback(msg, video_writer_info):
+    try:
+        # Convert ROS2 Image message (16-bit depth) to NumPy array
+        frame = np.frombuffer(msg.data, dtype=np.uint16).reshape((msg.height, msg.width))
+
+        # Normalize depth values to 8-bit range (0-255)
+        frame_normalized = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX)
+
+        # Convert to 8-bit grayscale
+        frame_8bit = np.uint8(frame_normalized)
+
+        frame_resized = cv2.resize(frame_8bit, (640, 480))
+
+        if video_writer_info["writer"] is None:
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            video_writer_info["writer"] = cv2.VideoWriter(
+                video_writer_info["output_file"], fourcc, video_writer_info["fps"], (640, 480), isColor=False
+            )
+        video_writer_info["writer"].write(frame_resized)
+
+    except Exception as e:
+        print(f"Error processing depth frame: {e}")
+
+def record_orbbec_video(node, topic_name="color", fps=30):
+
+    start_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"{HOME}/Desktop/Orbbec_{topic_name}_{start_time}.avi"
+
+    # Dictionary to store video writer info
+    video_writer_info = {"writer": None, "output_file": filename, "fps": fps}
+
+    if topic_name == "color":
+        # Subscribe to the image topic
+        subscription = node.create_subscription(
+            Image,
+            "/camera/" + topic_name + "/image_raw",
+            lambda msg: color_image_callback(msg, video_writer_info),
+            10
+        )
+        print(f"Recording video from ROS 2 topic: {topic_name}, saving to {filename}...")
+    elif topic_name == "depth":
+        # Subscribe to the depth image topic
+        subscription = node.create_subscription(
+            Image,
+            "/camera/" + topic_name + "/image_raw",
+            lambda msg: depth_image_callback(msg, video_writer_info),
+            10
+        )
+        print(f"Recording depth video from ROS 2 topic: {topic_name}, saving to {filename}...")
+
+def record_realsense_video():
+
+    # Initialize RealSense pipelines for multiple cameras
+    pipelines = []
+    video_writers = []
+    serials = []
+
+    # Get a list of connected devices
+    context = rs.context()
+    devices = context.query_devices()
+
+    if not devices:
+        raise RuntimeError("No RealSense cameras found.")
+
+    start_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    for device in devices:
+        serial = device.get_info(rs.camera_info.serial_number)
+        serials.append(serial)
+        pipeline = rs.pipeline()
+        config = rs.config()
+        config.enable_device(serial)
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        pipeline.start(config)
+        pipelines.append(pipeline)
+
+        # Generate video filename based on device serial
+        video_filename = f"{HOME}/Desktop/Realsense_{start_time}.avi"
+
+        # Define the codec and create VideoWriter object
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        out = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
+        video_writers.append(out)
+
+    try:
+        while True:
+            for i, pipeline in enumerate(pipelines):
+                frames = pipeline.wait_for_frames()
+                color_frame = frames.get_color_frame()
+                if not color_frame:
+                    continue
+
+                # Convert image to numpy array
+                color_image = np.asanyarray(color_frame.get_data())
+
+                # Check if the file has been removed and recreate it
+                if not os.path.exists(video_filename):
+                    video_writers[i].release()
+                    video_writers[i] = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
+
+                # Write the frame to the video file
+                video_writers[i].write(color_image)
+
+                # # Show the frame (optional)
+                # cv2.imshow(f'RealSense Video {i}', color_image)
+
+    finally:
+        # Stop recording
+        for out in video_writers:
+            out.release()
+        for pipeline in pipelines:
+            pipeline.stop()
+        cv2.destroyAllWindows()
+        print("Recording stopped.")
 
 

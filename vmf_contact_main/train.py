@@ -277,7 +277,8 @@ def get_args_parser(
 
 import yaml
 print(f"{data_path}/dataset/vmf_data/data*")
-def parse_args_from_yaml(config_path: str):
+
+def parse_args_from_yaml(config_path: str = current_dir + "/config.yaml"):
     # Load default configurations from YAML
     with open(config_path, 'r') as f:
         yaml_config = yaml.safe_load(f)
@@ -320,6 +321,9 @@ def main_module(
         raise ValueError(f"Point backbone {args.point_backbone} not found.")
     point_backbone_cfgs.load(args.point_backbone_cfgs, recursive=True)
     args.point_backbone_cfgs = point_backbone_cfgs
+
+    if args.debug:
+        args.batch_size = 1
 
     # Initialize logger if needed
     if args.experiment is not None and not args.debug:
